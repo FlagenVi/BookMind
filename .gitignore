@@ -1,0 +1,141 @@
+# -----------------------------------------------------------------------------
+# Secrets and local configuration
+# -----------------------------------------------------------------------------
+**/.env
+**/.env.*
+!**/.env.example
+**/secrets/
+**/secrets.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/id_rsa*
+**/id_ed25519*
+
+# -----------------------------------------------------------------------------
+# Local agent context and working notes (keep outside Git for now)
+# -----------------------------------------------------------------------------
+/AGENTS.md
+/PROMPT.md
+/PRODUCT_VISION.md
+/docs/READER_ARCHITECTURE.md
+/docs/TASKS_WITHOUT_AI.md
+/.codex/
+/.openai/
+/.claude/
+/.cursor/
+/.aider*
+/CLAUDE.md
+/GEMINI.md
+/backend/ProjectF/AUTH_API.md
+/backend/ProjectF/DATABASE.md
+/backend/ProjectF/HELP.md
+/backend/ProjectF/PREPARATION.md
+/backend/ProjectF/SUMMARIZATION.md
+/backend/ProjectF/SUMMARIZATION_V2.md
+
+# -----------------------------------------------------------------------------
+# Java / Gradle / Spring Boot
+# -----------------------------------------------------------------------------
+**/.gradle/
+**/build/
+**/out/
+**/target/
+**/*.class
+**/.apt_generated/
+**/.factorypath
+**/.project
+**/.classpath
+**/.settings/
+**/.springBeans
+**/.sts4-cache/
+**/bin/
+
+# Keep the Gradle wrapper binary even though it is a JAR.
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# -----------------------------------------------------------------------------
+# Node.js / Vite / frontend tooling
+# -----------------------------------------------------------------------------
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.vite/
+**/.turbo/
+**/.parcel-cache/
+**/.eslintcache
+**/*.tsbuildinfo
+**/coverage/
+**/.nyc_output/
+
+# Package-manager caches and diagnostic logs
+**/.npm/
+**/.yarn/cache/
+**/.pnpm-store/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+**/lerna-debug.log*
+
+# -----------------------------------------------------------------------------
+# Runtime files, logs, uploads and local storage
+# -----------------------------------------------------------------------------
+**/*.log
+**/*.log.*
+**/*.pid
+**/*.seed
+**/*.tmp
+**/*.temp
+**/*.bak
+**/*.swp
+**/*.swo
+**/bootrun.out
+**/bootrun.err
+**/.local/
+/tmp/
+/temp/
+/uploads/
+/storage/
+/data/
+/backend/ProjectF/tmp/
+/backend/ProjectF/temp/
+/backend/ProjectF/uploads/
+/backend/ProjectF/storage/
+/backend/ProjectF/data/
+**/*.db
+**/*.db-journal
+**/*.sqlite
+**/*.sqlite3
+
+# -----------------------------------------------------------------------------
+# IDE and editor settings
+# -----------------------------------------------------------------------------
+**/.idea/
+**/.vscode/
+**/*.iml
+**/*.iws
+**/*.ipr
+**/*.suo
+**/*.ntvs*
+**/*.njsproj
+**/*.sln
+
+# -----------------------------------------------------------------------------
+# Operating-system files
+# -----------------------------------------------------------------------------
+**/.DS_Store
+**/Thumbs.db
+**/Desktop.ini
+$RECYCLE.BIN/
+
+# -----------------------------------------------------------------------------
+# Test and tool output
+# -----------------------------------------------------------------------------
+**/test-results/
+**/playwright-report/
+**/blob-report/
+**/screenshots/
+**/.cache/

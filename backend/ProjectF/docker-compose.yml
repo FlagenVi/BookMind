@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: projectf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: projectf
+      POSTGRES_USER: projectf_user
+      POSTGRES_PASSWORD: projectf_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projectf_user -d projectf"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
