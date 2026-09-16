@@ -18,6 +18,14 @@ public class UserAccount {
     private String email;
     @Column(nullable = false, length = 255)
     private String passwordHash;
+    @Column(length = 80)
+    private String displayName;
+    @Column(length = 500)
+    private String bio;
+    @Column(columnDefinition = "bytea")
+    private byte[] avatarData;
+    @Column(length = 40)
+    private String avatarContentType;
     @CreationTimestamp
     @Column(nullable = false, updatable = false)
     private Instant createdAt;

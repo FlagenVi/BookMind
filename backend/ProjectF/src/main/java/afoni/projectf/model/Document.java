@@ -20,8 +20,13 @@ public class Document {
     private String originalText;
     @Column(nullable = false, length = 10)
     private String sourceType = "manual";
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 8)
+    private MaterialType materialType = MaterialType.DOCUMENT;
     @Column(length = 255)
     private String originalFilename;
+    @Column(name = "original_size", insertable = false, updatable = false)
+    private Long originalSize;
     @CreationTimestamp @Column(nullable = false, updatable = false)
     private Instant createdAt;
     @UpdateTimestamp @Column(nullable = false)

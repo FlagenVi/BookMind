@@ -11,7 +11,7 @@ import org.springframework.core.env.StandardEnvironment;
 /** Explicit bounded experiment. Never prints settings, raw provider responses or exception objects. */
 public class ChapterComparison {
  static long retryTokens=0,retryMillis=0,retryWait=0; static int extraCalls=0;
- static Summarizer.Result call(GroqSummarizer adapter,String text,String model,int bytes,int chars) throws InterruptedException {
+ static Summarizer.Result call(DeepSeekSummarizer adapter,String text,String model,int bytes,int chars) throws InterruptedException {
   String mode="fragment";
   for(int attempt=0;attempt<3;attempt++) {
    long begin=System.nanoTime();
@@ -43,7 +43,7 @@ public class ChapterComparison {
   if(args.length<3) Files.writeString(output,"# Сравнение на одной полной главе\n\n"+name+"\n\nТекст: "+chapter.length()+" символов, "+encoding.countTokensOrdinary(chapter)+" токенов o200k_base (без служебного формата Harmony).\n\n",StandardCharsets.UTF_8);
   if(args.length<2 || !args[1].equals("run")) return;
   if(inputs.size()>5) {System.out.println("Request budget exceeded; no API requests sent.");return;}
-  var settings=new LlmSettings(new StandardEnvironment());var adapter=new GroqSummarizer(settings);
+  var settings=new LlmSettings(new StandardEnvironment());var adapter=new DeepSeekSummarizer(settings);
   for(int variant=args.length>=3?1:0;variant<2;variant++) {
    retryTokens=0;retryMillis=0;retryWait=0;extraCalls=0;
    var chunks=variant==0?inputs:List.of(chapter);var summaries=new ArrayList<String>();

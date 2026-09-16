@@ -8,7 +8,13 @@ export interface ProcessingState {
   steps: number
   done: number
 }
-export function ProcessingBadge({ state }: { state?: ProcessingState }) {
+export function ProcessingBadge({
+  state,
+  className = 'mt-4',
+}: {
+  state?: ProcessingState
+  className?: string
+}) {
   if (!state) return null
   const status = state.status ?? state.preparation ?? 'not_started'
   const summary = !!state.status
@@ -32,7 +38,7 @@ export function ProcessingBadge({ state }: { state?: ProcessingState }) {
   const done = summary ? state.done : (state.processed ?? 0)
   const total = summary ? state.steps : (state.total ?? 0)
   return (
-    <div className="mt-4 space-y-2">
+    <div className={`${className} space-y-2`}>
       <span
         className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium ${status === 'failed' ? 'bg-danger-soft text-danger' : status === 'ready' ? 'bg-success-soft text-success' : active ? 'bg-accent-soft text-accent' : 'bg-subtle text-secondary'}`}
       >

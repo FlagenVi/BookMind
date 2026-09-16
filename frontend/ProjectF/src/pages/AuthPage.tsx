@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { Check } from 'lucide-react'
 import { authApi } from '../api/auth'
 import { Button } from '../components/ui/button'
 
@@ -16,6 +17,7 @@ const schema = z.object({
 })
 export function AuthPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
+  const [rememberMe, setRememberMe] = useState(false)
   const client = useQueryClient()
   const navigate = useNavigate()
   const {
@@ -26,7 +28,10 @@ export function AuthPage() {
   } = useForm<z.infer<typeof schema>>({ resolver: zodResolver(schema) })
   const mutation = useMutation({
     mutationFn: (input: z.infer<typeof schema>) =>
-      authApi.authenticate(mode, input),
+      authApi.authenticate(mode, {
+        ...input,
+        rememberMe: mode === 'login' && rememberMe,
+      }),
     onSuccess: async (profile) => {
       resetField('password')
       await client.cancelQueries()
@@ -95,6 +100,33 @@ export function AuthPage() {
               </p>
             )}
           </div>
+          {mode === 'login' && (
+            <label
+              className={`group flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3.5 transition-colors ${
+                rememberMe
+                  ? 'border-accent/60 bg-accent-soft'
+                  : 'border-line bg-page hover:border-line-strong hover:bg-subtle'
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                className="peer sr-only"
+              />
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-md border border-line-strong bg-surface text-transparent transition-colors peer-checked:border-accent peer-checked:bg-accent peer-checked:text-white peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent">
+                <Check size={14} strokeWidth={3} aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-foreground">
+                  Запомнить меня
+                </span>
+                <span className="mt-0.5 block text-xs leading-5 text-muted">
+                  Оставаться в аккаунте на этом устройстве 30 дней
+                </span>
+              </span>
+            </label>
+          )}
         </fieldset>
         {mutation.isError && (
           <p role="alert" className="text-sm text-danger">

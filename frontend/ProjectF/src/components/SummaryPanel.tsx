@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from '../api/client'
 import { Button } from './ui/button'
+import { NativeSelect } from './ui/native-select'
 import { ChapterResult, type SummarySection } from './ChapterResult'
 
 interface SummaryState {
@@ -54,9 +55,9 @@ export function SummaryPanel({ id }: { id: string }) {
     !!state && ['queued', 'running', 'waiting'].includes(state.status)
   return (
     <section className="mt-6 rounded-xl border border-accent-line bg-surface p-5">
-      <h2 className="text-lg font-semibold">Изложение книги</h2>
+      <h2 className="text-lg font-semibold">Изложение материала</h2>
       <p className="mt-2 text-sm text-muted">
-        По кнопке текст будет отправлен в Groq. Результаты частей и итог
+        По кнопке текст будет отправлен в DeepSeek. Результаты частей и итог
         сохранятся автоматически. Для большой книги обработка может занять
         несколько часов.
       </p>
@@ -64,9 +65,10 @@ export function SummaryPanel({ id }: { id: string }) {
         Подробность общего обзора
       </label>
       <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-        <select
+        <NativeSelect
           id="summary-level"
-          className="min-h-12 w-full rounded-xl border border-line px-4 py-3 sm:w-auto"
+          containerClassName="w-full sm:w-auto"
+          className="min-h-12 w-full rounded-xl border border-line px-4 py-3"
           disabled={start.isPending || !!state?.activeJob}
           value={level}
           onChange={(event) => {
@@ -78,7 +80,7 @@ export function SummaryPanel({ id }: { id: string }) {
           <option value="short">Кратко</option>
           <option value="medium">Средне</option>
           <option value="detailed">Подробно</option>
-        </select>
+        </NativeSelect>
         {state && ['not_started', 'failed'].includes(state.status) && (
           <Button
             className="min-h-12 w-full sm:w-auto"
@@ -110,7 +112,7 @@ export function SummaryPanel({ id }: { id: string }) {
       )}
       {state && !state.configured && (
         <p className="mt-3 text-sm text-warning">
-          На сервере ещё не настроено подключение к Groq.
+          На сервере ещё не настроено подключение к DeepSeek.
         </p>
       )}
       {state?.activeJob && state.activeJob.level !== level && (

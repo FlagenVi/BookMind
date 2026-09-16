@@ -14,8 +14,13 @@ public class SummaryQueue {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final Summarizer summarizer;
+    private final LlmSettings settings;
+    @org.springframework.beans.factory.annotation.Autowired
+    public SummaryQueue(JdbcTemplate jdbc,PlatformTransactionManager manager,Summarizer summarizer,LlmSettings settings) {
+        this.jdbc=jdbc; this.transaction=new TransactionTemplate(manager); this.summarizer=summarizer; this.settings=settings;
+    }
     public SummaryQueue(JdbcTemplate jdbc,PlatformTransactionManager manager,Summarizer summarizer) {
-        this.jdbc=jdbc; this.transaction=new TransactionTemplate(manager); this.summarizer=summarizer;
+        this(jdbc,manager,summarizer,null);
     }
     public static List<String> split(String text) {
         var result=new ArrayList<String>(); int start=0,bytes=0,index=0;
@@ -71,8 +76,13 @@ public class SummaryQueue {
             if(((Number)step.get("section_number")).intValue()==-1 && jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=? AND round_number=?",Integer.class,id,round)==1) mode="overview_"+job.get("compression_level");
             String repair=(String)step.get("repair_text");
             try {
-                var result=summarizer.summarize(repair==null?(String)step.get("input_text"):repair,repair==null?mode:"repair_"+mode,(String)job.get("model_name"));
-                if(result.text().isBlank() || result.text().length()>GroqSummarizer.outputLimit(mode)) throw new Summarizer.Failure("Ответ модели не соответствует объёму.",true,result.retrySeconds(),result.tokens(),null);
+                String model=(String)job.get("model_name");
+                if(settings!=null && settings.model()!=null && !model.equals(settings.model())) {
+                    model=settings.model();
+                    jdbc.update("UPDATE summary_jobs SET model_name=? WHERE id=?",model,id);
+                }
+                var result=summarizer.summarize(repair==null?(String)step.get("input_text"):repair,repair==null?mode:"repair_"+mode,model);
+                if(result.text().isBlank() || result.text().length()>DeepSeekSummarizer.outputLimit(mode)) throw new Summarizer.Failure("Ответ модели не соответствует объёму.",true,result.retrySeconds(),result.tokens(),null);
                 jdbc.update("UPDATE summary_steps SET output_text=?,repair_text=NULL WHERE job_id=? AND round_number=? AND step_number=?",result.text(),id,round,step.get("step_number"));
                 jdbc.update("UPDATE summary_jobs SET status='running',attempts=0,error_message=NULL,tokens_used=tokens_used+?,updated_at=CURRENT_TIMESTAMP WHERE id=?",result.tokens(),id);
                 cooldown(result.retrySeconds());
@@ -81,7 +91,7 @@ public class SummaryQueue {
                 int attempts=((Number)job.get("attempts")).intValue()+1;
                 long delay=Math.max(1,Math.min(86400,failure.retrySeconds));
                 // Quota waits do not exhaust content retries, including a daily quota pause.
-                boolean quota=failure.getMessage().startsWith("Квота Groq");
+                boolean quota=failure.code.equals("RATE_LIMIT");
                 jdbc.update("UPDATE summary_jobs SET status=?,attempts=?,tokens_used=tokens_used+?,error_message=?,next_attempt_at=clock_timestamp() + (? * interval '1 second'),updated_at=CURRENT_TIMESTAMP WHERE id=?",failure.retryable && (quota || attempts<5)?"waiting":"failed",quota?0:attempts,failure.tokens,failure.getMessage(),delay,id);
                 if(failure.repairText!=null) jdbc.update("UPDATE summary_steps SET repair_text=? WHERE job_id=? AND round_number=? AND step_number=?",failure.repairText,id,round,step.get("step_number"));
                 cooldown(delay);
@@ -97,7 +107,7 @@ public class SummaryQueue {
         for(var row:rows) groups.computeIfAbsent(((Number)row.get("section_number")).intValue(),k->new ArrayList<>()).add((String)row.get("output_text"));
         if(groups.containsKey(-1) && rows.size()==1) {
             UUID result=UUID.randomUUID();String level=(String)job.get("compression_level");
-            jdbc.update("INSERT INTO summaries(id,document_id,summary_text,compression_level,compression_percent,algorithm,model_name) VALUES (?,?,?,?,?,'groq-chapters-v2',?)",result,job.get("document_id"),rows.getFirst().get("output_text"),level,switch(level){case "short"->20;case "detailed"->50;default->35;},job.get("model_name"));
+            jdbc.update("INSERT INTO summaries(id,document_id,summary_text,compression_level,compression_percent,algorithm,model_name) VALUES (?,?,?,?,?,'deepseek-chapters-v2',?)",result,job.get("document_id"),rows.getFirst().get("output_text"),level,switch(level){case "short"->20;case "detailed"->50;default->35;},job.get("model_name"));
             jdbc.update("UPDATE summary_jobs SET status='ready',result_id=?,error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",result,id);
             return;
         }

@@ -2,9 +2,11 @@ import { useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { Save, Sparkles } from 'lucide-react'
 import { documentsApi } from '../api/documents'
 import { Button } from '../components/ui/button'
+import { NativeSelect } from '../components/ui/native-select'
 import { DocumentUpload } from '../components/DocumentUpload'
 
 const schema = z.object({
@@ -25,6 +27,7 @@ const field =
 
 export function EditorPage() {
   const client = useQueryClient()
+  const navigate = useNavigate()
   const {
     register,
     handleSubmit,
@@ -36,9 +39,10 @@ export function EditorPage() {
   })
   const save = useMutation({
     mutationFn: documentsApi.create,
-    onSuccess: () => {
+    onSuccess: (document) => {
       void client.invalidateQueries({ queryKey: ['documents'] })
       void client.invalidateQueries({ queryKey: ['me'] })
+      navigate(`/documents/${document.id}`)
     },
   })
   const content = useWatch({ control, name: 'content' })
@@ -133,7 +137,7 @@ export function EditorPage() {
           )}
           {save.isSuccess && (
             <p role="status" className="mt-3 text-sm text-accent">
-              Текст сохранён. Он доступен в истории.
+              Текст сохранён. Открываем рабочую область.
             </p>
           )}
         </form>
@@ -145,24 +149,25 @@ export function EditorPage() {
           <label htmlFor="compression" className="mt-6 text-sm font-medium">
             Уровень сжатия
           </label>
-          <select
+          <NativeSelect
             id="compression"
             disabled
+            containerClassName="w-full"
             className={`${field} text-muted`}
             defaultValue="medium"
           >
             <option value="short">Кратко — 20% предложений</option>
             <option value="medium">Средне — 35% предложений</option>
             <option value="detailed">Подробно — 50% предложений</option>
-          </select>
+          </NativeSelect>
           <div className="my-8 flex flex-1 flex-col items-center justify-center rounded-xl bg-page px-5 py-12 text-center">
             <span className="rounded-full bg-accent-soft p-4 text-accent">
               <Sparkles size={26} />
             </span>
             <h3 className="mt-5 font-medium">Здесь будет главное</h3>
             <p className="mt-2 text-sm leading-6 text-muted">
-              Генерация доступна на странице сохранённого документа после
-              подготовки текста. Откройте документ в истории и выберите
+              Генерация доступна в рабочей области сохранённого документа после
+              подготовки текста. Откройте раздел «Документы» и выберите
               подробность изложения.
             </p>
           </div>

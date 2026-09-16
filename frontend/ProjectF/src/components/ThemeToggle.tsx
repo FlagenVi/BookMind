@@ -3,7 +3,7 @@ import { Moon, Sun } from 'lucide-react'
 import { Button } from './ui/button'
 
 type Theme = 'light' | 'dark'
-export function ThemeToggle() {
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const [theme, setTheme] = useState<Theme>(() =>
     document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light',
   )
@@ -44,8 +44,9 @@ export function ThemeToggle() {
   return (
     <Button
       variant="outline"
-      className="mt-5 w-full justify-start"
+      className={`sidebar-item mt-2 min-h-11 w-full justify-start ${compact ? 'md:justify-center md:px-0' : ''}`}
       aria-label={dark ? 'Включить светлую тему' : 'Включить тёмную тему'}
+      title={compact ? (dark ? 'Светлая тема' : 'Тёмная тема') : undefined}
       onClick={() => {
         const next = dark ? 'light' : 'dark'
         document.documentElement.dataset.theme = next
@@ -63,7 +64,14 @@ export function ThemeToggle() {
       ) : (
         <Moon size={18} aria-hidden="true" />
       )}
-      {dark ? 'Светлая тема' : 'Тёмная тема'}
+      <span className={compact ? 'md:hidden' : ''}>
+        {dark ? 'Светлая тема' : 'Тёмная тема'}
+      </span>
+      {compact && (
+        <span className="sidebar-tooltip hidden md:block" aria-hidden="true">
+          {dark ? 'Светлая тема' : 'Тёмная тема'}
+        </span>
+      )}
     </Button>
   )
 }

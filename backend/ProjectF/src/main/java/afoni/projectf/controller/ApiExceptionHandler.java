@@ -28,7 +28,7 @@ public class ApiExceptionHandler {
     ResponseEntity<ErrorBody> status(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).body(new ErrorBody(switch (ex.getStatusCode().value()) {
             case 404 -> "Документ не найден"; case 401 -> "Необходимо войти в аккаунт";
-            case 409 -> "Email уже используется";
+            case 409 -> ex.getReason() == null ? "Данные были изменены в другой вкладке" : ex.getReason();
             case 413 -> "Файл слишком большой. Максимум — 10 МБ.";
             case 400 -> ex.getReason() == null ? "Проверьте заполнение полей" : ex.getReason();
             default -> "Не удалось выполнить запрос";

@@ -1,6 +1,7 @@
 package afoni.projectf.controller;
 
 import afoni.projectf.model.Document;
+import afoni.projectf.model.MaterialType;
 import afoni.projectf.repository.DocumentRepository;
 import afoni.projectf.service.DocumentPreparation;
 import afoni.projectf.service.BookTextExtractor;
@@ -32,13 +33,15 @@ public class DocumentUploadController {
     }
     @PostMapping(value="/upload", consumes="multipart/form-data") @ResponseStatus(HttpStatus.ACCEPTED) @Transactional
     Map<String,Object> upload(Authentication auth, @RequestParam MultipartFile file,
-                              @RequestParam(defaultValue="") String title) throws IOException {
+                              @RequestParam(defaultValue="") String title,
+                              @RequestParam(required=false) String materialType) throws IOException {
         String filename = file.getOriginalFilename();
-        if (filename == null) throw bad("Поддерживаются TXT, EPUB, FB2, PDF и DOCX");
+        if (filename == null) throw bad("Поддерживаются TXT, MD, EPUB, FB2, PDF и DOCX");
         filename = filename.replace('\\','/'); filename = filename.substring(filename.lastIndexOf('/')+1);
-        if (filename.lastIndexOf('.')<0) throw bad("Поддерживаются TXT, EPUB, FB2, PDF и DOCX");
+        if (filename.lastIndexOf('.')<0) throw bad("Поддерживаются TXT, MD, EPUB, FB2, PDF и DOCX");
         String format=filename.substring(filename.lastIndexOf('.')+1).toLowerCase(Locale.ROOT);
-        if (!java.util.Set.of("txt","epub","fb2","pdf","docx").contains(format)) throw bad("Поддерживаются TXT, EPUB, FB2, PDF и DOCX");
+        if (!java.util.Set.of("txt","md","epub","fb2","pdf","docx").contains(format)) throw bad("Поддерживаются TXT, MD, EPUB, FB2, PDF и DOCX");
+        MaterialType type=materialType(materialType,format);
         if (filename.length()>255) throw bad("Слишком длинное имя файла");
         int maxBytes=30*1024*1024;
         if (file.getSize()>maxBytes) throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"Максимум — 30 МБ");
@@ -49,14 +52,14 @@ public class DocumentUploadController {
         title=title.strip(); if (title.isEmpty()) title=book.suggestedTitle()==null?filename.substring(0,filename.lastIndexOf('.')):book.suggestedTitle();
         if (title.isBlank() || title.length()>200) throw bad("Название должно содержать от 1 до 200 символов");
         var document=new Document(); document.setUserId(UUID.fromString(auth.getName()));
-        document.setTitle(title); document.setOriginalText(text); document.setSourceType(format); document.setOriginalFilename(filename);
+        document.setTitle(title); document.setOriginalText(text); document.setSourceType(format); document.setMaterialType(type); document.setOriginalFilename(filename);
         documents.saveAndFlush(document);
         String hash=sha256(bytes);
         jdbc.update("UPDATE documents SET original_file=?,original_sha256=?,original_size=? WHERE id=?",
                 bytes,hash,bytes.length,document.getId());
         structures.save(document.getId(),book);
         preparation.enqueue(document.getId(),text.length());
-        return Map.of("id",document.getId(),"title",title);
+        return Map.of("id",document.getId(),"title",title,"materialType",type.name());
     }
     @GetMapping("/{id}/preparation") Map<String,Object> status(Authentication auth, @PathVariable UUID id) {
         owned(auth,id);
@@ -74,4 +77,8 @@ public class DocumentUploadController {
         catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
     private ResponseStatusException bad(String message) { return new ResponseStatusException(HttpStatus.BAD_REQUEST,message); }
+    private MaterialType materialType(String value,String format) {
+        try { return MaterialType.requestedOrDefault(value,format); }
+        catch(IllegalArgumentException error) { throw bad(error.getMessage()); }
+    }
 }

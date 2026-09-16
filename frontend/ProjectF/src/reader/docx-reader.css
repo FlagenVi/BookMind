@@ -1,0 +1,36 @@
+.docx-reader [data-reader-text] > .projectf-docx-wrapper {
+  min-height: 100%;
+  padding: 28px !important;
+  background: transparent !important;
+}
+
+.docx-reader .projectf-docx-wrapper > section.projectf-docx {
+  zoom: var(--docx-scale, 1);
+  margin: 0 auto 24px !important;
+  color: #171717 !important;
+  background: #fff !important;
+  box-shadow:
+    0 1px 3px rgb(15 23 42 / 18%),
+    0 16px 36px rgb(15 23 42 / 18%) !important;
+  scroll-margin-top: 64px;
+}
+
+.docx-reader .projectf-docx-wrapper > section.projectf-docx:last-child {
+  margin-bottom: 28px !important;
+}
+
+.docx-reader ::highlight(projectf-docx-search) {
+  color: inherit;
+  background: rgb(250 204 21 / 65%);
+}
+
+.docx-reader ::highlight(projectf-docx-annotations) {
+  color: inherit;
+  background: rgb(45 212 191 / 35%);
+}
+
+@media (max-width: 760px) {
+  .docx-reader [data-reader-text] > .projectf-docx-wrapper {
+    padding: 14px !important;
+  }
+}

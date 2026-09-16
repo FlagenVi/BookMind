@@ -64,9 +64,9 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
-// Explicit manual check: one small synthetic text sent to the configured Groq account.
+// Explicit manual check: one small synthetic text sent to the configured DeepSeek account.
 tasks.register('llmSmoke', JavaExec) {
     dependsOn testClasses
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'afoni.projectf.service.GroqSmokeCheck'
+    mainClass = 'afoni.projectf.service.DeepSeekSmokeCheck'
 }

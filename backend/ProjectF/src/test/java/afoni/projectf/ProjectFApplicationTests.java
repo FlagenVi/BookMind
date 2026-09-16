@@ -15,12 +15,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
 import java.sql.DriverManager;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint;
 import com.jayway.jsonpath.JsonPath;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.mock.web.MockHttpSession;
+import jakarta.servlet.http.Cookie;
 import org.springframework.http.MediaType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -48,6 +50,7 @@ class ProjectFApplicationTests {
     @Autowired Flyway flyway;
     @Autowired MockMvc mvc;
     @Autowired afoni.projectf.service.DocumentPreparation preparation;
+    @Autowired afoni.projectf.service.BookImportService bookImports;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     afoni.projectf.service.LlmSettings llmSettings;
@@ -55,7 +58,7 @@ class ProjectFApplicationTests {
     @Test
     void summaryQueueRetriesAndReducesWithoutRepeatingCompletedSteps() throws Exception {
         org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
-        org.mockito.Mockito.when(llmSettings.model()).thenReturn("openai/gpt-oss-120b");
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
         String email=UUID.randomUUID()+"@example.test";
         var session=registerAccount(email,UUID.randomUUID().toString());
         var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
@@ -80,8 +83,10 @@ class ProjectFApplicationTests {
             if(calls.incrementAndGet()==1) throw new afoni.projectf.service.Summarizer.Failure("Квота",true,70);
             return new afoni.projectf.service.Summarizer.Result("Краткое изложение.",50);
         };
-        var worker=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake);
+        jdbc.update("UPDATE summary_jobs SET model_name='openai/gpt-oss-120b' WHERE document_id=?",document);
+        var worker=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake,llmSettings);
         worker.tick();
+        assertEquals("deepseek-flash",jdbc.queryForObject("SELECT model_name FROM summary_jobs WHERE document_id=?",String.class,document));
         mvc.perform(get(path).session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("waiting"));
         worker.tick(); assertEquals(1,calls.get());
         for(int i=0;i<40;i++) {
@@ -171,7 +176,9 @@ class ProjectFApplicationTests {
             var file=new org.springframework.mock.web.MockMultipartFile("file","book."+format.toUpperCase(java.util.Locale.ROOT),"application/octet-stream",bytes);
             var result=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf())).andExpect(status().isAccepted()).andReturn();
             UUID id=UUID.fromString(JsonPath.read(result.getResponse().getContentAsString(),"$.id"));
+            assertEquals("BOOK",JsonPath.read(result.getResponse().getContentAsString(),"$.materialType"));
             assertEquals(format,jdbc.queryForObject("SELECT source_type FROM documents WHERE id=?",String.class,id));
+            assertEquals("BOOK",jdbc.queryForObject("SELECT material_type FROM documents WHERE id=?",String.class,id));
             String text=jdbc.queryForObject("SELECT original_text FROM documents WHERE id=?",String.class,id);
             assertTrue(text.contains("Привет мир!"));
             assertTrue(jdbc.queryForObject("SELECT count(*) FROM reader_sections WHERE document_id=?",Integer.class,id)>0);
@@ -181,10 +188,197 @@ class ProjectFApplicationTests {
                     .andExpect(status().isOk()).andExpect(jsonPath("$.content").isNotEmpty());
             mvc.perform(get("/api/books/"+id+"/content").session(session))
                     .andExpect(status().isOk()).andExpect(jsonPath("$[0].content").isNotEmpty());
+            mvc.perform(put("/api/books/"+id+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"positionOffset\":0,\"sectionNumber\":0,\"sectionOffset\":2,\"version\":0}"))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.positionOffset").value(2))
+                    .andExpect(jsonPath("$.sectionNumber").value(0)).andExpect(jsonPath("$.sectionOffset").value(2));
             for(int i=0;i<10;i++) preparation.processNext();
             assertEquals(text,jdbc.queryForObject("SELECT string_agg(content,'' ORDER BY part_number) FROM document_parts WHERE document_id=?",String.class,id));
             mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
         }
+    }
+
+    @Test
+    void materialTypesSeparateListsAndContextsFreezeTheirSourceRange() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        String content="Глава первая\n"+"Прочитанный текст. ".repeat(20)+"\nГлава вторая\nНепрочитанный текст.";
+        String json=new tools.jackson.databind.ObjectMapper().writeValueAsString(java.util.Map.of("title","Документ","content",content));
+        var created=mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(json))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.materialType").value("DOCUMENT")).andReturn();
+        UUID id=UUID.fromString(JsonPath.read(created.getResponse().getContentAsString(),"$.id"));
+        mvc.perform(get("/api/documents").session(session)).andExpect(jsonPath("$.totalElements").value(1));
+        mvc.perform(get("/api/books").session(session)).andExpect(jsonPath("$.totalElements").value(0));
+        var snapshot=mvc.perform(post("/api/materials/"+id+"/contexts").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"full_document\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.content").value(content))
+                .andExpect(jsonPath("$.materialType").value("DOCUMENT")).andReturn();
+        String contextId=JsonPath.read(snapshot.getResponse().getContentAsString(),"$.id");
+        jdbc.update("UPDATE documents SET original_text='Изменённый текст' WHERE id=?",id);
+        mvc.perform(get("/api/materials/"+id+"/contexts/"+contextId).session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.content").value(content));
+        mvc.perform(post("/api/materials/"+id+"/contexts").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"whole_book\",\"includeUnread\":true}"))
+                .andExpect(status().isBadRequest());
+        jdbc.update("UPDATE documents SET material_type='BOOK' WHERE id=?",id);
+        mvc.perform(get("/api/documents").session(session)).andExpect(jsonPath("$.totalElements").value(0));
+        mvc.perform(get("/api/books").session(session)).andExpect(jsonPath("$.totalElements").value(1));
+        mvc.perform(post("/api/materials/"+id+"/contexts").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"whole_book\"}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post("/api/materials/"+id+"/contexts").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"mode\":\"whole_book\",\"includeUnread\":true}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.content").value("Изменённый текст"));
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void bookSearchPaginatesInUtf16OrderAndRequiresOwner() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        String text="😀 "+"Начало ".repeat(20)+"Искомое, затем искомое и в конце ИСКОМОЕ."+" Конец".repeat(20);
+        var file=new org.springframework.mock.web.MockMultipartFile("file","search.txt","text/plain",text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var uploaded=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andReturn();
+        String id=JsonPath.read(uploaded.getResponse().getContentAsString(),"$.id");
+        int second=text.indexOf("искомое");
+        var secondPage=mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","  искомое  ").param("offset","1").param("limit","1"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.query").value("искомое"))
+                .andExpect(jsonPath("$.total").value(3)).andExpect(jsonPath("$.offset").value(1)).andExpect(jsonPath("$.limit").value(1))
+                .andExpect(jsonPath("$.items.length()").value(1)).andExpect(jsonPath("$.items[0].index").value(1))
+                .andExpect(jsonPath("$.items[0].sectionNumber").value(0)).andExpect(jsonPath("$.items[0].sectionOffset").value(second))
+                .andExpect(jsonPath("$.items[0].positionOffset").value(second)).andExpect(jsonPath("$.items[0].length").value("искомое".length()))
+                .andExpect(jsonPath("$.items[0].content").doesNotExist()).andReturn();
+        String response=secondPage.getResponse().getContentAsString();
+        String excerpt=JsonPath.read(response,"$.items[0].excerpt");
+        int excerptStart=((Number)JsonPath.read(response,"$.items[0].excerptMatchStart")).intValue();
+        int excerptEnd=((Number)JsonPath.read(response,"$.items[0].excerptMatchEnd")).intValue();
+        assertTrue(excerpt.substring(excerptStart,excerptEnd).equalsIgnoreCase("искомое"));
+        assertTrue(excerpt.length()<=202);
+        assertFalse(Character.isLowSurrogate(excerpt.charAt(0)));
+        assertFalse(Character.isHighSurrogate(excerpt.charAt(excerpt.length()-1)));
+        mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","искомое").param("offset","0").param("limit","2"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(3)).andExpect(jsonPath("$.items.length()").value(2))
+                .andExpect(jsonPath("$.items[0].index").value(0)).andExpect(jsonPath("$.items[1].index").value(1));
+        mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","искомое").param("offset","99"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(3)).andExpect(jsonPath("$.items").isEmpty());
+        mvc.perform(get("/api/books/"+id+"/search").session(other).param("q","искомое"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","x"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","искомое").param("offset","-1"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/books/"+id+"/search").session(session).param("q","искомое").param("limit","101"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void epubSectionReturnsResolvedInternalLinks() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        byte[] bytes=afoni.projectf.service.BookTextExtractorTests.epub(afoni.projectf.service.BookTextExtractorTests.linkedEntries());
+        var file=new org.springframework.mock.web.MockMultipartFile("file","links.epub","application/epub+zip",bytes);
+        var uploaded=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andReturn();
+        String id=JsonPath.read(uploaded.getResponse().getContentAsString(),"$.id");
+        mvc.perform(get("/api/books/"+id+"/sections/0").session(other)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/books/"+id+"/sections/0").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.links.length()").value(4))
+                .andExpect(jsonPath("$.links[0].targetSectionNumber").value(0))
+                .andExpect(jsonPath("$.links[1].targetSectionNumber").value(1))
+                .andExpect(jsonPath("$.links[1].targetSectionOffset").value(0))
+                .andExpect(jsonPath("$.links[2].targetSectionNumber").value(1))
+                .andExpect(jsonPath("$.links[2].targetSectionOffset").isNumber())
+                .andExpect(jsonPath("$.links[3].kind").value("note"));
+        assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM reader_section_links WHERE document_id=?",Integer.class,UUID.fromString(id)));
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void bookDetailsExposeEpubMetadataAndOnlyOwnerCanEdit() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var entries=afoni.projectf.service.BookTextExtractorTests.entries();
+        entries.put("OPS/book.opf","<package xmlns='http://www.idpf.org/2007/opf' xmlns:dc='http://purl.org/dc/elements/1.1/'><metadata><dc:title>Исходное название</dc:title><dc:creator>Исходный автор</dc:creator><dc:subject>Классика</dc:subject><dc:publisher>Первое издательство</dc:publisher><dc:date>1866</dc:date><dc:language>ru</dc:language><dc:description>Описание из OPF</dc:description></metadata><manifest><item id='cover' href='cover.jpg' media-type='image/jpeg' properties='cover-image'/><item id='one' href='chapters/one%20chapter.xhtml' media-type='application/xhtml+xml'/><item id='two' href='chapters/two.xhtml' media-type='application/xhtml+xml'/></manifest><spine><itemref idref='one'/><itemref idref='two'/></spine></package>");
+        entries.put("OPS/cover.jpg","cover");
+        byte[] bytes=afoni.projectf.service.BookTextExtractorTests.epub(entries);
+        var file=new org.springframework.mock.web.MockMultipartFile("file","metadata.epub","application/epub+zip",bytes);
+        var uploaded=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andReturn();
+        String id=JsonPath.read(uploaded.getResponse().getContentAsString(),"$.id");
+        mvc.perform(get("/api/books/"+id+"/details").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Исходное название"))
+                .andExpect(jsonPath("$.author").value("Исходный автор"))
+                .andExpect(jsonPath("$.publisher").value("Первое издательство"))
+                .andExpect(jsonPath("$.publicationDate").value("1866"))
+                .andExpect(jsonPath("$.language").value("ru"))
+                .andExpect(jsonPath("$.description").value("Описание из OPF"))
+                .andExpect(jsonPath("$.format").value("epub"))
+                .andExpect(jsonPath("$.filename").value("metadata.epub"))
+                .andExpect(jsonPath("$.fileSizeBytes").value(bytes.length))
+                .andExpect(jsonPath("$.hasCover").value(true))
+                .andExpect(jsonPath("$.createdAt").isNotEmpty()).andExpect(jsonPath("$.updatedAt").isNotEmpty());
+        mvc.perform(get("/api/books/"+id+"/details").session(other)).andExpect(status().isNotFound());
+
+        String update=new tools.jackson.databind.ObjectMapper().writeValueAsString(java.util.Map.of(
+                "title","Новое название","author","Новый автор","publisher","Новое издательство",
+                "publicationDate","2024-10","language","en","genres",java.util.List.of("Роман","Драма","роман"),
+                "description","Новое описание"));
+        mvc.perform(put("/api/books/"+id+"/details").session(other).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(update))
+                .andExpect(status().isNotFound());
+        mvc.perform(put("/api/books/"+id+"/details").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(update))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Новое название"))
+                .andExpect(jsonPath("$.publicationDate").value("2024-10"))
+                .andExpect(jsonPath("$.genres.length()").value(2))
+                .andExpect(jsonPath("$.genres[0]").value("Драма")).andExpect(jsonPath("$.genres[1]").value("Роман"));
+        mvc.perform(get("/api/books/"+id+"/details").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.publisher").value("Новое издательство"))
+                .andExpect(jsonPath("$.language").value("en")).andExpect(jsonPath("$.description").value("Новое описание"));
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void fb2DetailsRefreshOnlyFoundExtendedMetadataAndRequiresOwner() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        String xml="<FictionBook xmlns='http://www.gribuser.ru/xml/fictionbook/2.0'><description><title-info><genre>fiction</genre><book-title>Название из файла</book-title><author><first-name>Автор</first-name><last-name>Файла</last-name></author><annotation><p>Первый   абзац.</p><p>Второй абзац.</p></annotation><date value='2007-01-01'>2007</date><lang>ru</lang></title-info><publish-info><publisher>Издательство АСТ</publisher><year>2018</year></publish-info></description><body><section><title><p>Глава</p></title><p>Текст книги.</p></section></body></FictionBook>";
+        byte[] bytes=xml.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var file=new org.springframework.mock.web.MockMultipartFile("file","refresh.fb2","application/xml",bytes);
+        var uploaded=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andReturn();
+        UUID id=UUID.fromString(JsonPath.read(uploaded.getResponse().getContentAsString(),"$.id"));
+        jdbc.update("UPDATE documents SET title='Ручное название',author='Ручной автор',publisher=NULL,publication_date=NULL,language=NULL,description=NULL,library_status='reading' WHERE id=?",id);
+        jdbc.update("DELETE FROM book_genres WHERE document_id=?",id);
+        jdbc.update("INSERT INTO book_genres(document_id,genre) VALUES (?,'Ручной жанр')",id);
+        mvc.perform(put("/api/books/"+id+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":1}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/books/"+id+"/bookmarks").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":1,\"excerpt\":\"Текст\"}"))
+                .andExpect(status().isCreated());
+        int sections=jdbc.queryForObject("SELECT count(*) FROM reader_sections WHERE document_id=?",Integer.class,id);
+
+        mvc.perform(post("/api/books/"+id+"/details/refresh").session(other).with(csrf()))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/books/"+id+"/details/refresh").session(session).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.title").value("Ручное название"))
+                .andExpect(jsonPath("$.author").value("Ручной автор"))
+                .andExpect(jsonPath("$.genres[0]").value("Ручной жанр"))
+                .andExpect(jsonPath("$.publisher").value("Издательство АСТ"))
+                .andExpect(jsonPath("$.publicationDate").value("2007-01-01"))
+                .andExpect(jsonPath("$.language").value("ru"))
+                .andExpect(jsonPath("$.description").value("Первый абзац.\n\nВторой абзац."));
+        assertEquals("reading",jdbc.queryForObject("SELECT library_status FROM documents WHERE id=?",String.class,id));
+        assertEquals(sections,jdbc.queryForObject("SELECT count(*) FROM reader_sections WHERE document_id=?",Integer.class,id));
+        assertEquals(1,jdbc.queryForObject("SELECT position_offset FROM reading_progress WHERE document_id=?",Integer.class,id));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM reader_bookmarks WHERE document_id=?",Integer.class,id));
+
+        jdbc.update("UPDATE documents SET original_file=NULL WHERE id=?",id);
+        mvc.perform(post("/api/books/"+id+"/details/refresh").session(session).with(csrf()))
+                .andExpect(status().isConflict());
+        assertEquals("Издательство АСТ",jdbc.queryForObject("SELECT publisher FROM documents WHERE id=?",String.class,id));
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
     }
 
     @Test
@@ -195,13 +389,22 @@ class ProjectFApplicationTests {
                         .content("{\"title\":\"Братья Карамазовы\",\"content\":\"Большой роман для чтения\"}"))
                 .andExpect(status().isCreated());
         UUID id=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        jdbc.update("UPDATE documents SET material_type='BOOK' WHERE id=?",id);
         mvc.perform(put("/api/books/"+id+"/library").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"reading\",\"author\":\"Фёдор Достоевский\",\"genres\":[\"Роман\",\"Классика\"]}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.genres[0]").value("Роман"));
         mvc.perform(put("/api/books/"+id+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"positionOffset\":5,\"elapsedSeconds\":60}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.readingSeconds").value(60))
+                .andExpect(jsonPath("$.version").value(1))
                 .andExpect(jsonPath("$.lastReadAt").isNotEmpty());
+        mvc.perform(put("/api/books/"+id+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":8,\"version\":0}"))
+                .andExpect(status().isConflict());
+        mvc.perform(put("/api/books/"+id+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":8,\"version\":1}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.positionOffset").value(8))
+                .andExpect(jsonPath("$.version").value(2));
         mvc.perform(get("/api/books?q=достоевский&status=reading&sort=duration").session(session))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.items[0].author").value("Фёдор Достоевский"))
@@ -209,6 +412,220 @@ class ProjectFApplicationTests {
                 .andExpect(jsonPath("$.items[0].libraryStatus").value("reading"))
                 .andExpect(jsonPath("$.items[0].readingSeconds").value(60));
         mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void annotationsCanBeEditedExportedAndSpanSectionBoundary() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        String text="Первая глава\n\nВторая глава";
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Книга заметок\",\"content\":\"Первая глава\\n\\nВторая глава\"}"))
+                .andExpect(status().isCreated());
+        UUID id=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        jdbc.update("INSERT INTO reader_sections(document_id,section_number,title,role,start_offset,end_offset,content,toc_level) VALUES (?,?,?,?,?,?,?,?)",
+                id,0,"Первая","main",0,12,text.substring(0,12),0);
+        jdbc.update("INSERT INTO reader_sections(document_id,section_number,title,role,start_offset,end_offset,content,toc_level) VALUES (?,?,?,?,?,?,?,?)",
+                id,1,"Вторая","main",12,text.length(),text.substring(12),0);
+
+        var bookmarkResult=mvc.perform(post("/api/books/"+id+"/bookmarks").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":2,\"label\":\"Начало\",\"excerpt\":\"Первая глава\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.updatedAt").isNotEmpty()).andReturn();
+        String bookmarkId=JsonPath.read(bookmarkResult.getResponse().getContentAsString(),"$.id");
+        mvc.perform(put("/api/books/"+id+"/bookmarks/"+bookmarkId).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"label\":\"Важное начало\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.label").value("Важное начало"))
+                .andExpect(jsonPath("$.updatedAt").isNotEmpty());
+
+        int start=9,end=16;
+        String exact=text.substring(start,end);
+        var highlightResult=mvc.perform(post("/api/books/"+id+"/highlights").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"startOffset\":"+start+",\"endOffset\":"+end+",\"color\":\"yellow\",\"note\":\"Через разделы\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.exactText").value(exact)).andReturn();
+        String highlightId=JsonPath.read(highlightResult.getResponse().getContentAsString(),"$.id");
+        mvc.perform(put("/api/books/"+id+"/highlights/"+highlightId).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"color\":\"blue\",\"note\":\"Исправленная заметка\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.color").value("blue"))
+                .andExpect(jsonPath("$.note").value("Исправленная заметка"))
+                .andExpect(jsonPath("$.updatedAt").isNotEmpty());
+        mvc.perform(put("/api/books/"+id+"/highlights/"+highlightId).session(other).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"color\":\"pink\"}"))
+                .andExpect(status().isNotFound());
+
+        var export=mvc.perform(get("/api/books/"+id+"/annotations/export").session(session))
+                .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith("text/markdown"))
+                .andExpect(header().string("Content-Disposition",org.hamcrest.Matchers.containsString("attachment"))).andReturn();
+        String markdown=export.getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertTrue(markdown.contains("# Книга заметок — заметки и цитаты"));
+        assertTrue(markdown.contains("### Важное начало"));
+        assertTrue(markdown.contains("Исправленная заметка"));
+        assertTrue(markdown.contains(exact.replace("\n","\n> ")));
+        mvc.perform(get("/api/books/"+id+"/annotations/export").session(other)).andExpect(status().isNotFound());
+        mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void libraryManagementFiltersCoversFavoritesBulkStatusAndDownloads() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Альфа\",\"content\":\"Первая книга\"}"))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Бета\",\"content\":\"Вторая книга длиннее\"}"))
+                .andExpect(status().isCreated());
+        UUID first=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=? AND d.title='Альфа'",UUID.class,email);
+        UUID second=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=? AND d.title='Бета'",UUID.class,email);
+        jdbc.update("UPDATE documents SET source_type='txt',author='Анна',original_size=100,material_type='BOOK' WHERE id=?",first);
+        jdbc.update("UPDATE documents SET source_type='fb2',author='Яков',original_size=200,material_type='BOOK' WHERE id=?",second);
+        jdbc.update("INSERT INTO book_genres(document_id,genre) VALUES (?,'Роман'),(?,'Драма')",second,first);
+
+        mvc.perform(put("/api/books/"+second+"/favorite").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"favorite\":true}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(put("/api/books/"+second+"/favorite").session(other).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"favorite\":false}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/books?format=fb2&genre=Роман&favorite=yes&sort=size&direction=desc").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(second.toString()))
+                .andExpect(jsonPath("$.items[0].favorite").value(true))
+                .andExpect(jsonPath("$.items[0].fileSizeBytes").value(200));
+        mvc.perform(get("/api/books?sort=author&direction=desc").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].author").value("Яков"));
+        mvc.perform(get("/api/books/facets").session(session)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.formats.length()").value(2))
+                .andExpect(jsonPath("$.genres.length()").value(2));
+
+        mvc.perform(put("/api/books/bulk-status").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[\""+first+"\",\""+second+"\"],\"status\":\"finished\"}"))
+                .andExpect(status().isNoContent());
+        assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM documents WHERE id IN (?,?) AND library_status='finished'",Integer.class,first,second));
+        mvc.perform(put("/api/books/bulk-status").session(other).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[\""+first+"\"],\"status\":\"reading\"}"))
+                .andExpect(status().isNotFound());
+        assertEquals("finished",jdbc.queryForObject("SELECT library_status FROM documents WHERE id=?",String.class,first));
+
+        byte[] png=java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        var cover=new org.springframework.mock.web.MockMultipartFile("file","cover.png","image/png",png);
+        mvc.perform(multipart("/api/books/"+second+"/cover").file(cover).session(session).with(csrf())
+                        .with(request->{request.setMethod("PUT");return request;}))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasCover").value(true))
+                .andExpect(jsonPath("$.favorite").value(true)).andExpect(jsonPath("$.assetCount").value(1))
+                .andExpect(jsonPath("$.textLength").value("Вторая книга длиннее".length()))
+                .andExpect(jsonPath("$.preparationStatus").value("not_started"));
+        mvc.perform(get("/api/books/"+second+"/cover").session(session)).andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.IMAGE_PNG)).andExpect(content().bytes(png));
+        var invalid=new org.springframework.mock.web.MockMultipartFile("file","cover.png","image/png",new byte[]{1,2,3});
+        mvc.perform(multipart("/api/books/"+second+"/cover").file(invalid).session(session).with(csrf())
+                        .with(request->{request.setMethod("PUT");return request;}))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/books/"+second+"/original?download=true").session(session))
+                .andExpect(status().isOk()).andExpect(header().string("Content-Disposition",org.hamcrest.Matchers.containsString("attachment")))
+                .andExpect(content().bytes("Вторая книга длиннее".getBytes(StandardCharsets.UTF_8)));
+        mvc.perform(get("/api/books/"+second+"/original?download=true").session(other)).andExpect(status().isNotFound());
+        mvc.perform(delete("/api/documents/"+first).session(session).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(delete("/api/documents/"+second).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void bookCollectionsArePrivateFilterableAndKeepBooksWhenDeleted() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Книга для коллекции\",\"content\":\"Текст книги\"}"))
+                .andExpect(status().isCreated());
+        UUID book=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        jdbc.update("UPDATE documents SET material_type='BOOK' WHERE id=?",book);
+        var created=mvc.perform(post("/api/books/collections").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"  Фантастика  \"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.name").value("Фантастика"))
+                .andExpect(jsonPath("$.bookCount").value(0)).andReturn();
+        String collection=JsonPath.read(created.getResponse().getContentAsString(),"$.id");
+        mvc.perform(post("/api/books/collections").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"фантастика\"}"))
+                .andExpect(status().isConflict());
+        var foreign=mvc.perform(post("/api/books/collections").session(other).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Фантастика\"}"))
+                .andExpect(status().isCreated()).andReturn();
+        String foreignCollection=JsonPath.read(foreign.getResponse().getContentAsString(),"$.id");
+
+        mvc.perform(put("/api/books/bulk-collection").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[\""+book+"\"],\"collectionId\":\""+foreignCollection+"\"}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(put("/api/books/bulk-collection").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ids\":[\""+book+"\"],\"collectionId\":\""+collection+"\"}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/books?collection="+collection).session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].collectionId").value(collection));
+        mvc.perform(get("/api/books/collections").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].bookCount").value(1));
+        mvc.perform(put("/api/books/collections/"+collection).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Любимая фантастика\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Любимая фантастика"));
+        mvc.perform(delete("/api/books/collections/"+collection).session(other).with(csrf())).andExpect(status().isNotFound());
+        mvc.perform(delete("/api/books/collections/"+collection).session(session).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(get("/api/books?collection=none").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].id").value(book.toString()));
+
+        mvc.perform(delete("/api/documents/"+book).session(session).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(delete("/api/books/collections/"+foreignCollection).session(other).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void readingSessionsStatisticsGoalsAndEstimateAreTrackedWithoutDuplicateTime() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        var other=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        String text="к".repeat(5000);
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"Статистика\",\"content\":\""+text+"\"}"))
+                .andExpect(status().isCreated());
+        UUID book=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        jdbc.update("UPDATE documents SET material_type='BOOK' WHERE id=?",book);
+        jdbc.update("INSERT INTO book_genres(document_id,genre) VALUES (?,?)",book,"Классика");
+        UUID readingSession=UUID.randomUUID();
+        mvc.perform(put("/api/books/"+book+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":100,\"confirmedOffset\":100,\"elapsedSeconds\":60,\"sessionId\":\""+readingSession+"\",\"sessionElapsedSeconds\":60}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(1));
+        mvc.perform(put("/api/books/"+book+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":500,\"confirmedOffset\":500,\"version\":1,\"elapsedSeconds\":60,\"sessionId\":\""+readingSession+"\",\"sessionElapsedSeconds\":120}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.readingSeconds").value(120));
+        mvc.perform(put("/api/books/"+book+"/progress").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"positionOffset\":500,\"confirmedOffset\":500,\"version\":2,\"elapsedSeconds\":60,\"sessionId\":\""+readingSession+"\",\"sessionElapsedSeconds\":120}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.readingSeconds").value(120));
+
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM reading_sessions WHERE id=?",Integer.class,readingSession));
+        assertEquals(120,jdbc.queryForObject("SELECT duration_seconds FROM reading_sessions WHERE id=?",Integer.class,readingSession));
+        assertEquals(500L,jdbc.queryForObject("SELECT characters_read FROM reading_sessions WHERE id=?",Long.class,readingSession));
+        mvc.perform(get("/api/reading/statistics").session(session).param("timezone","Europe/Moscow"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.day.durationSeconds").value(120))
+                .andExpect(jsonPath("$.day.charactersRead").value(500)).andExpect(jsonPath("$.day.approximatePages").value(1))
+                .andExpect(jsonPath("$.day.averageCharactersPerMinute").value(250))
+                .andExpect(jsonPath("$.week.durationSeconds").value(120)).andExpect(jsonPath("$.month.durationSeconds").value(120))
+                .andExpect(jsonPath("$.activity.length()").value(365)).andExpect(jsonPath("$.currentBook.id").value(book.toString()))
+                .andExpect(jsonPath("$.currentBook.progressPercent").value(10)).andExpect(jsonPath("$.currentBook.remainingSeconds").value(1080))
+                .andExpect(jsonPath("$.goal.dailyMinutes").value(20)).andExpect(jsonPath("$.goal.monthlyBooks").value(2))
+                .andExpect(jsonPath("$.genres[0].genre").value("Классика")).andExpect(jsonPath("$.genres[0].books").value(1));
+        mvc.perform(get("/api/reading/statistics").session(other).param("timezone","Europe/Moscow"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.day.durationSeconds").value(0)).andExpect(jsonPath("$.currentBook").doesNotExist());
+        mvc.perform(get("/api/reading/statistics").session(session).param("timezone","Mars/Olympus"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(put("/api/reading/goal").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"dailyMinutes\":35,\"monthlyBooks\":4}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.dailyMinutes").value(35)).andExpect(jsonPath("$.monthlyBooks").value(4));
+        mvc.perform(put("/api/reading/goal").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"dailyMinutes\":1441,\"monthlyBooks\":4}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/reading/statistics").session(session).param("timezone","Europe/Moscow"))
+                .andExpect(jsonPath("$.goal.dailyMinutes").value(35)).andExpect(jsonPath("$.goal.monthlyBooks").value(4));
+        mvc.perform(delete("/api/documents/"+book).session(session).with(csrf())).andExpect(status().isNoContent());
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM reading_sessions WHERE id=?",Integer.class,readingSession));
     }
 
     @Test
@@ -223,6 +640,67 @@ class ProjectFApplicationTests {
         }
         var large=new org.springframework.mock.web.MockMultipartFile("file","book.txt","text/plain",new byte[30*1024*1024+1]);
         mvc.perform(multipart("/api/documents/upload").file(large).session(session).with(csrf())).andExpect(status().isPayloadTooLarge());
+    }
+
+    @Test
+    void resumableUploadCompletesIdempotentlyThroughBackgroundImport() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        byte[] bytes="Первая глава\n\nТекст книги".getBytes(StandardCharsets.UTF_8);
+        String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        var started=mvc.perform(post("/api/book-uploads").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filename\":\"book.txt\",\"title\":\"book\",\"size\":"+bytes.length+",\"materialType\":\"BOOK\"}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("uploading")).andReturn();
+        String uploadId=JsonPath.read(started.getResponse().getContentAsString(),"$.id");
+        mvc.perform(patch("/api/book-uploads/"+uploadId).session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM).header("Upload-Offset",0).content(bytes))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.confirmedOffset").value(bytes.length));
+        String completeBody="{\"sha256\":\""+hash+"\"}";
+        mvc.perform(post("/api/book-uploads/"+uploadId+"/complete").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"sha256\":\""+"0".repeat(64)+"\"}"))
+                .andExpect(status().isBadRequest());
+        for(int attempt=0;attempt<2;attempt++) mvc.perform(post("/api/book-uploads/"+uploadId+"/complete")
+                        .session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(completeBody))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("queued"))
+                .andExpect(jsonPath("$.documentId").doesNotExist());
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM documents d JOIN book_upload_sessions u ON u.user_id=d.user_id WHERE u.id=?",Integer.class,UUID.fromString(uploadId)));
+        bookImports.processNext();
+        var completed=mvc.perform(get("/api/book-uploads/"+uploadId).session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("completed"))
+                .andExpect(jsonPath("$.importProgress").value(100)).andExpect(jsonPath("$.report.importedSections").value(1))
+                .andReturn();
+        String documentId=JsonPath.read(completed.getResponse().getContentAsString(),"$.documentId");
+        mvc.perform(post("/api/book-uploads/"+uploadId+"/complete").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(completeBody))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.documentId").value(documentId));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM documents WHERE id=?",Integer.class,UUID.fromString(documentId)));
+        mvc.perform(delete("/api/documents/"+documentId).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void failedBackgroundImportCanBeRetriedWithoutUploadingAgain() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        byte[] bytes="not a pdf".getBytes(StandardCharsets.UTF_8);
+        String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        var started=mvc.perform(post("/api/book-uploads").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"filename\":\"broken.pdf\",\"title\":\"broken\",\"size\":"+bytes.length+",\"materialType\":\"DOCUMENT\"}"))
+                .andExpect(status().isCreated()).andReturn();
+        String uploadId=JsonPath.read(started.getResponse().getContentAsString(),"$.id");
+        mvc.perform(patch("/api/book-uploads/"+uploadId).session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM).header("Upload-Offset",0).content(bytes))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/book-uploads/"+uploadId+"/complete").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"sha256\":\""+hash+"\"}"))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("queued"));
+        bookImports.processNext();
+        mvc.perform(get("/api/book-uploads/"+uploadId).session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"))
+                .andExpect(jsonPath("$.errorMessage").isNotEmpty());
+        mvc.perform(post("/api/book-uploads/"+uploadId+"/retry").session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("queued"));
+        assertEquals(bytes.length,jdbc.queryForObject("SELECT octet_length(uploaded_bytes) FROM book_upload_sessions WHERE id=?",Integer.class,UUID.fromString(uploadId)));
+        jdbc.update("DELETE FROM book_upload_sessions WHERE id=?",UUID.fromString(uploadId));
     }
 
     private MockHttpSession registerAccount(String email, String pass) throws Exception {
@@ -293,6 +771,119 @@ class ProjectFApplicationTests {
     }
 
     @Test
+    void rememberMeRestoresAfterSessionExpiresAndLogoutRevokesIt() throws Exception {
+        String email = UUID.randomUUID() + "@example.test";
+        String pass = UUID.randomUUID().toString();
+        registerAccount(email, pass);
+        var login = mvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"" + pass + "\",\"rememberMe\":true}"))
+                .andExpect(status().isOk()).andReturn();
+        String cookieHeader = login.getResponse().getHeaders("Set-Cookie").stream()
+                .filter(value -> value.startsWith("PROJECTF_REMEMBER="))
+                .findFirst().orElseThrow();
+        assertTrue(cookieHeader.contains("HttpOnly"));
+        assertTrue(cookieHeader.contains("SameSite=Lax"));
+        assertTrue(cookieHeader.contains("Max-Age=2592000"));
+        String value = cookieHeader.substring("PROJECTF_REMEMBER=".length()).split(";", 2)[0];
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM remembered_logins WHERE user_id=(SELECT id FROM users WHERE email=?)",
+                Integer.class, email));
+        assertFalse(jdbc.queryForObject("SELECT token_hash FROM remembered_logins WHERE user_id=(SELECT id FROM users WHERE email=?)",
+                String.class, email).contains(value.split("\\.", 2)[1]));
+
+        Cookie remembered = new Cookie("PROJECTF_REMEMBER", value);
+        var restored = mvc.perform(get("/api/auth/csrf").cookie(remembered))
+                .andExpect(status().isOk()).andReturn();
+        var restoredSession = (MockHttpSession) restored.getRequest().getSession(false);
+        assertNotNull(restoredSession);
+        mvc.perform(get("/api/auth/me").session(restoredSession))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.email").value(email));
+        String csrfToken = JsonPath.read(restored.getResponse().getContentAsString(), "$.token");
+        mvc.perform(post("/api/auth/logout").session(restoredSession).cookie(remembered)
+                        .header("X-CSRF-TOKEN", csrfToken))
+                .andExpect(status().isNoContent());
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM remembered_logins WHERE user_id=(SELECT id FROM users WHERE email=?)",
+                Integer.class, email));
+        mvc.perform(get("/api/auth/me").cookie(remembered)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void sessionRevocationAlsoRevokesRememberedLogin() throws Exception {
+        String email = UUID.randomUUID() + "@example.test";
+        String pass = UUID.randomUUID().toString();
+        registerAccount(email, pass);
+        var login = mvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"" + pass + "\",\"rememberMe\":true}"))
+                .andExpect(status().isOk()).andReturn();
+        var session = (MockHttpSession) login.getRequest().getSession(false);
+        String id = session.getId();
+        String cookieHeader = login.getResponse().getHeaders("Set-Cookie").stream()
+                .filter(value -> value.startsWith("PROJECTF_REMEMBER="))
+                .findFirst().orElseThrow();
+        Cookie cookie = new Cookie("PROJECTF_REMEMBER",
+                cookieHeader.substring("PROJECTF_REMEMBER=".length()).split(";", 2)[0]);
+        mvc.perform(delete("/api/auth/sessions/" + id).session(session).cookie(cookie).with(csrf()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/me").cookie(cookie)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void profileDetailsAndAvatarCanBeUpdated() throws Exception {
+        var session = registerAccount(UUID.randomUUID() + "@example.test", UUID.randomUUID().toString());
+        mvc.perform(put("/api/auth/profile").session(session).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"  Читатель  \" ,\"bio\":\" Люблю большие романы. \"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.displayName").value("Читатель"))
+                .andExpect(jsonPath("$.bio").value("Люблю большие романы."))
+                .andExpect(jsonPath("$.hasAvatar").value(false));
+
+        byte[] png = new byte[]{(byte) 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a};
+        var avatar = new org.springframework.mock.web.MockMultipartFile("file", "avatar.png", "image/png", png);
+        mvc.perform(multipart("/api/auth/profile/avatar").file(avatar).session(session).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasAvatar").value(true));
+        mvc.perform(get("/api/auth/profile/avatar").session(session))
+                .andExpect(status().isOk()).andExpect(content().contentType("image/png"))
+                .andExpect(content().bytes(png));
+
+        var invalid = new org.springframework.mock.web.MockMultipartFile("file", "avatar.png", "image/png", new byte[]{1, 2, 3});
+        mvc.perform(multipart("/api/auth/profile/avatar").file(invalid).session(session).with(csrf()))
+                .andExpect(status().isBadRequest());
+        mvc.perform(delete("/api/auth/profile/avatar").session(session).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.hasAvatar").value(false));
+        mvc.perform(get("/api/auth/profile/avatar").session(session)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void userCanInspectAndRevokeAnotherSession() throws Exception {
+        String email = UUID.randomUUID() + "@example.test";
+        String pass = UUID.randomUUID().toString();
+        var first = registerAccount(email, pass);
+        mvc.perform(get("/api/auth/me").session(first)
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0"))
+                .andExpect(status().isOk());
+
+        var secondResult = mvc.perform(post("/api/auth/login").with(csrf())
+                        .header("User-Agent", "Mozilla/5.0 (Android 16; Mobile) Firefox/142.0")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + email + "\",\"password\":\"" + pass + "\"}"))
+                .andExpect(status().isOk()).andReturn();
+        var second = (MockHttpSession) secondResult.getRequest().getSession(false);
+
+        var list = mvc.perform(get("/api/auth/sessions").session(first))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].current").value(true))
+                .andExpect(jsonPath("$[1].current").value(false))
+                .andReturn();
+        java.util.List<String> otherIds = JsonPath.read(list.getResponse().getContentAsString(), "$[?(@.current == false)].id");
+        assertEquals(1, otherIds.size());
+
+        mvc.perform(delete("/api/auth/sessions/" + otherIds.getFirst()).session(first).with(csrf()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/auth/me").session(second)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/auth/me").session(first)).andExpect(status().isOk());
+    }
+
+    @Test
     void documentsArePrivateAndLegacyApiIsClosed() throws Exception {
         String email = UUID.randomUUID() + "@example.test";
         var alice = registerAccount(email, UUID.randomUUID().toString());
@@ -313,8 +904,36 @@ class ProjectFApplicationTests {
     }
 
     @Test
+    void documentSearchAndFiltersWorkAcrossList() throws Exception {
+        String email = UUID.randomUUID() + "@example.test";
+        var session = registerAccount(email, UUID.randomUUID().toString());
+        for (String title : java.util.List.of("Alpha", "Zeta")) {
+            mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"title\":\"" + title + "\",\"content\":\"Sample text\"}"))
+                    .andExpect(status().isCreated());
+        }
+        jdbc.update("UPDATE documents SET source_type='pdf', original_filename='Report.pdf', original_size=100 WHERE title='Alpha' AND user_id=(SELECT id FROM users WHERE email=?)", email);
+        jdbc.update("UPDATE documents SET source_type='docx', original_filename='Notes.docx', original_size=200 WHERE title='Zeta' AND user_id=(SELECT id FROM users WHERE email=?)", email);
+
+        mvc.perform(get("/api/documents?q=report&format=pdf").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.items[0].title").value("Alpha"));
+        mvc.perform(get("/api/documents?q=REPORT").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(1));
+        mvc.perform(get("/api/documents?q=%25").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
+        mvc.perform(get("/api/documents?q=report&format=docx").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.totalElements").value(0));
+        mvc.perform(get("/api/documents?sort=size&direction=desc").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].title").value("Zeta"));
+        mvc.perform(get("/api/documents?sort=title&direction=asc").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.items[0].title").value("Alpha"));
+        mvc.perform(get("/api/documents?sort=invalid").session(session)).andExpect(status().isBadRequest());
+    }
+
+    @Test
     void migrationsAreAppliedOnceAndLongNotesRoundTrip() {
-        assertEquals(12, flyway.info().applied().length);
+        assertEquals(24, flyway.info().applied().length);
         assertEquals(0, flyway.migrate().migrationsExecuted);
         Note note = new Note();
         note.setTitle("Migration test");
@@ -366,7 +985,7 @@ class ProjectFApplicationTests {
                 .locations("classpath:db/migration").baselineVersion("0").load();
         // Explicit adoption is tested; normal startup never baselines automatically.
         legacy.baseline();
-        assertEquals(12, legacy.migrate().migrationsExecuted);
+        assertEquals(24, legacy.migrate().migrationsExecuted);
         assertEquals("Keep this record", jdbc.queryForObject("SELECT content FROM legacy_test.note WHERE id = 1", String.class));
         assertEquals("text", jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_test' AND table_name = 'note' AND column_name = 'content'", String.class));
     }

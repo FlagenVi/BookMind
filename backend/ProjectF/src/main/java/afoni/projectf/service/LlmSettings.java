@@ -10,6 +10,7 @@ public class LlmSettings {
     private final String key;
     private final String model;
     private final boolean valid;
+    private final String configurationIssue;
     public LlmSettings(Environment environment) {
         Map<String,String> local=new HashMap<>();
         // Read only inside the backend, never log file contents or parser exceptions.
@@ -28,12 +29,19 @@ public class LlmSettings {
             } catch(Exception ignored) { /* unavailable config is reported without values */ }
         }
         key=environment.getProperty("LLM_API_KEY",local.getOrDefault("LLM_API_KEY",""));
-        model=environment.getProperty("LLM_MODEL",local.getOrDefault("LLM_MODEL","openai/gpt-oss-120b"));
-        String base=environment.getProperty("LLM_BASE_URL",local.getOrDefault("LLM_BASE_URL","https://api.groq.com/openai/v1"));
-        String provider=environment.getProperty("LLM_PROVIDER",local.getOrDefault("LLM_PROVIDER","groq"));
-        valid=provider.equals("groq") && base.replaceAll("/$", "").equals("https://api.groq.com/openai/v1") && Set.of("openai/gpt-oss-120b","openai/gpt-oss-20b").contains(model);
+        model=environment.getProperty("LLM_MODEL",local.getOrDefault("LLM_MODEL","deepseek-flash"));
+        String base=environment.getProperty("LLM_BASE_URL",local.getOrDefault("LLM_BASE_URL","https://api.deepseek.com"));
+        String provider=environment.getProperty("LLM_PROVIDER",local.getOrDefault("LLM_PROVIDER","deepseek"));
+        var problems=new ArrayList<String>();
+        if(!provider.equals("deepseek")) problems.add("LLM_PROVIDER");
+        if(!base.replaceAll("/$", "").equals("https://api.deepseek.com")) problems.add("LLM_BASE_URL");
+        if(!Set.of("deepseek-flash","deepseek-v4-pro").contains(model)) problems.add("LLM_MODEL");
+        if(key.isBlank()) problems.add("LLM_API_KEY");
+        configurationIssue=String.join(", ",problems);
+        valid=problems.isEmpty();
     }
-    public boolean configured() { return valid && !key.isBlank(); }
+    public boolean configured() { return valid; }
+    public String configurationIssue() { return configurationIssue; }
     String key() { return key; }
     public String model() { return model; }
 }

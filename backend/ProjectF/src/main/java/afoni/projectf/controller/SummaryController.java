@@ -26,13 +26,13 @@ public class SummaryController {
         jdbc.queryForObject("SELECT id FROM documents WHERE id=? FOR UPDATE",UUID.class,id);
         if(level==null || !Set.of("short","medium","detailed").contains(level)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Выберите уровень подробности");
         if(!jdbc.queryForList("SELECT id FROM summary_jobs WHERE document_id=? AND compression_level<>? AND status IN ('queued','running','waiting')",id,level).isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT,"Документ уже обрабатывается. Дождитесь завершения текущего изложения.");
-        if(!settings.configured()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Настройте Groq на сервере");
+        if(!settings.configured()) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,"Настройте DeepSeek на сервере");
         var ready=jdbc.queryForList("SELECT document_id FROM document_jobs WHERE document_id=? AND status='ready'",id);
         if(ready.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Сначала подготовьте документ");
         UUID job=UUID.randomUUID();
         int inserted=jdbc.update("INSERT INTO summary_jobs(id,document_id,compression_level,model_name) VALUES (?,?,?,?) ON CONFLICT(document_id,compression_level) DO NOTHING",job,id,level,settings.model());
         if(inserted==1) queue.initialize(job,id);
-        else jdbc.update("UPDATE summary_jobs SET status='queued',attempts=0,error_message=NULL,next_attempt_at=CURRENT_TIMESTAMP WHERE document_id=? AND compression_level=? AND status='failed'",id,level);
+        else jdbc.update("UPDATE summary_jobs SET status='queued',attempts=0,error_message=NULL,model_name=?,next_attempt_at=CURRENT_TIMESTAMP WHERE document_id=? AND compression_level=? AND status='failed'",settings.model(),id,level);
     }
     @GetMapping Map<String,Object> get(Authentication auth,@PathVariable UUID id,@RequestParam(defaultValue="medium") String level) {
         owned(auth,id);

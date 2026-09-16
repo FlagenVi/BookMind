@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "test": "node --experimental-strip-types --test tests/reader-geometry.test.ts tests/text-anchors.test.ts tests/section-cache.test.ts tests/reader-api.test.ts tests/book-details-format.test.ts tests/reader-navigation.test.ts tests/reader-segments.test.ts tests/reader-preferences.test.ts",
+    "benchmark:reader": "node --experimental-strip-types --expose-gc benchmarks/reader-window.bench.ts",
     "preview": "vite preview",
     "format": "prettier --write src vite.config.ts index.html",
     "format:check": "prettier --check src vite.config.ts index.html"
@@ -17,7 +19,9 @@
     "@tanstack/react-query": "^5.102.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "docx-preview": "^0.4.0",
     "lucide-react": "^1.41.0",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hook-form": "^7.87.0",
