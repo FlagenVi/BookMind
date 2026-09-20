@@ -54,6 +54,74 @@ class ProjectFApplicationTests {
     @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     afoni.projectf.service.LlmSettings llmSettings;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    afoni.projectf.service.BookChatClient bookChatClient;
+
+    @Test void bookChatKeepsSourcesWithinSavedPositionAndNeverRepeatsARequestId() throws Exception {
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
+        String email=UUID.randomUUID()+"@example.test";
+        var owner=registerAccount(email,UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        UUID user=jdbc.queryForObject("SELECT id FROM users WHERE email=?",UUID.class,email);
+        UUID book=UUID.randomUUID();
+        String text="Герой находит письмо. ".repeat(40)+"СЕКРЕТНЫЙ_ФИНАЛ";
+        int confirmed=text.indexOf("СЕКРЕТНЫЙ_ФИНАЛ");
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type,author) VALUES (?,?,?,?,'epub','BOOK',?)",
+                book,user,"Тестовая книга",text,"Автор");
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset) VALUES (?,?,?,?)",
+                user,book,confirmed,confirmed);
+        String path="/api/books/"+book+"/chats";
+        mvc.perform(get(path).session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated());
+        UUID thread=jdbc.queryForObject("SELECT id FROM book_chat_threads WHERE document_id=?",UUID.class,book);
+        mvc.perform(get(path+"/"+thread+"/turns").session(stranger)).andExpect(status().isNotFound());
+        UUID anotherBook=UUID.randomUUID();
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type) VALUES (?,?,?,'Другая книга','epub','BOOK')",
+                anotherBook,user,"Другая книга");
+        mvc.perform(get("/api/books/"+anotherBook+"/chats/"+thread+"/turns").session(owner)).andExpect(status().isNotFound());
+        org.mockito.Mockito.verifyNoInteractions(bookChatClient);
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        var sent=new java.util.concurrent.atomic.AtomicReference<String>();
+        org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("deepseek-flash")))
+                .thenAnswer(invocation->{
+                    java.util.List<afoni.projectf.service.BookChatClient.Message> messages=invocation.getArgument(0);
+                    sent.set(messages.getLast().content());calls.incrementAndGet();
+                    return new afoni.projectf.service.BookChatClient.Result("Герой находит письмо [1].",120,35);
+                });
+        UUID first=UUID.randomUUID();
+        String grounded="{\"id\":\""+first+"\",\"mode\":\"grounded\",\"question\":\"Что находит герой?\"}";
+        for(int i=0;i<2;i++) mvc.perform(post(path+"/"+thread+"/turns").session(owner).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(grounded))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ready"))
+                .andExpect(jsonPath("$.references[0].endOffset").value(confirmed));
+        assertEquals(1,calls.get());
+        assertTrue(sent.get().contains("Герой находит письмо"));
+        assertFalse(sent.get().contains("СЕКРЕТНЫЙ_ФИНАЛ"));
+        assertFalse(jdbc.queryForObject("SELECT source_excerpt FROM book_chat_turns WHERE id=?",String.class,first).contains("СЕКРЕТНЫЙ_ФИНАЛ"));
+        UUID second=UUID.randomUUID();
+        mvc.perform(post(path+"/"+thread+"/turns").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\""+second+"\",\"mode\":\"model_knowledge\",\"question\":\"Кто автор?\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.mode").value("model_knowledge"))
+                .andExpect(jsonPath("$.references.length()").value(0));
+        assertEquals(2,calls.get());
+        assertFalse(sent.get().contains("Герой находит письмо"));
+        assertNull(jdbc.queryForObject("SELECT source_excerpt FROM book_chat_turns WHERE id=?",String.class,second));
+        org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("deepseek-flash")))
+                .thenThrow(new afoni.projectf.service.BookChatClient.Failure("Ответ достиг лимита",80,1200));
+        UUID failed=UUID.randomUUID();
+        mvc.perform(post(path+"/"+thread+"/turns").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\""+failed+"\",\"mode\":\"grounded\",\"question\":\"Что дальше?\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"))
+                .andExpect(jsonPath("$.completionTokens").value(1200));
+        mvc.perform(get(path+"/"+thread+"/turns").session(owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$[2].status").value("failed"));
+        mvc.perform(delete(path+"/"+thread).session(owner).with(csrf())).andExpect(status().isNoContent());
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM book_chat_turns WHERE thread_id=?",Integer.class,thread));
+        jdbc.update("DELETE FROM documents WHERE id=?",book);
+        jdbc.update("DELETE FROM documents WHERE id=?",anotherBook);
+    }
 
     @Test
     void summaryQueueRetriesAndReducesWithoutRepeatingCompletedSteps() throws Exception {
@@ -66,7 +134,6 @@ class ProjectFApplicationTests {
                 .content("{\"title\":\"Test\",\"content\":\""+"Русский текст 📚. ".repeat(1000)+"\"}")).andExpect(status().isCreated());
         UUID document=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
         String path="/api/documents/"+document+"/summary";
-        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"medium\"}")).andExpect(status().isBadRequest());
         mvc.perform(post("/api/documents/"+document+"/preparation").session(session).with(csrf())).andExpect(status().isNoContent());
         for(int i=0;i<20;i++) preparation.processNext();
         mvc.perform(get(path).session(other)).andExpect(status().isNotFound());
@@ -79,12 +146,13 @@ class ProjectFApplicationTests {
         mvc.perform(get(path+"/sections/0").session(other)).andExpect(status().isNotFound());
         var calls=new java.util.concurrent.atomic.AtomicInteger();
         afoni.projectf.service.Summarizer fake=(text,level,model)-> {
-            assertTrue(text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=afoni.projectf.service.SummaryQueue.INPUT_BYTES);
+            assertTrue(text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=afoni.projectf.service.SummaryQueue.DIRECT_INPUT_BYTES);
             if(calls.incrementAndGet()==1) throw new afoni.projectf.service.Summarizer.Failure("Квота",true,70);
             return new afoni.projectf.service.Summarizer.Result("Краткое изложение.",50);
         };
         jdbc.update("UPDATE summary_jobs SET model_name='openai/gpt-oss-120b' WHERE document_id=?",document);
         var worker=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake,llmSettings);
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
         worker.tick();
         assertEquals("deepseek-flash",jdbc.queryForObject("SELECT model_name FROM summary_jobs WHERE document_id=?",String.class,document));
         mvc.perform(get(path).session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("waiting"));
@@ -95,12 +163,11 @@ class ProjectFApplicationTests {
             new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake).tick();
         }
         mvc.perform(get(path).session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ready")).andExpect(jsonPath("$.text").value("Краткое изложение."));
-        mvc.perform(get(path).session(session)).andExpect(jsonPath("$.sections[0].text").value("Краткое изложение."));
-        mvc.perform(get(path+"/sections/0").session(session)).andExpect(status().isOk()).andExpect(jsonPath("$[0].text").value("Краткое изложение."));
+        mvc.perform(get(path).session(session)).andExpect(jsonPath("$.sections.length()").value(0));
         long steps=jdbc.queryForObject("SELECT count(*) FROM summary_steps s JOIN summary_jobs j ON j.id=s.job_id WHERE j.document_id=?",Long.class,document);
         assertEquals(steps+1,calls.get());
         assertEquals(steps*50,jdbc.queryForObject("SELECT tokens_used FROM summary_jobs WHERE document_id=?",Long.class,document));
-        assertTrue(jdbc.queryForObject("SELECT round_number FROM summary_jobs WHERE document_id=?",Integer.class,document)>0);
+        assertEquals(0,jdbc.queryForObject("SELECT round_number FROM summary_jobs WHERE document_id=?",Integer.class,document));
         mvc.perform(delete("/api/documents/"+document).session(session).with(csrf())).andExpect(status().isNoContent());
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM summary_jobs WHERE document_id=?",Integer.class,document));
     }
@@ -139,7 +206,7 @@ class ProjectFApplicationTests {
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM document_jobs WHERE document_id=?",Integer.class,uuid));
     }
 
-    @Test void chapterBoundariesRepairAndAncillaryExclusionSurviveRestart() throws Exception {
+    @Test void directSummaryRepairSurvivesRestart() throws Exception {
         String email=UUID.randomUUID()+"@example.test";
         var session=registerAccount(email,UUID.randomUUID().toString());
         String source="Глава: Первый рассказ\n"+"Альфа. ".repeat(900)+"\nГлава: Второй рассказ\nБета.\nГлава: Примечания\nСноска.";
@@ -151,10 +218,9 @@ class ProjectFApplicationTests {
         var calls=new java.util.concurrent.atomic.AtomicInteger();
         afoni.projectf.service.Summarizer fake=(text,mode,model)-> {
             if(calls.incrementAndGet()==1) throw new afoni.projectf.service.Summarizer.Failure("Сокращение",true,1,123,"Черновик Альфа");
-            if(mode.startsWith("repair_")) {assertEquals("Черновик Альфа",text);return new afoni.projectf.service.Summarizer.Result("Альфа",10,1);}
-            if(mode.startsWith("overview_")) { assertFalse(text.contains("Сноска"));assertTrue(text.contains("Первый рассказ"));assertTrue(text.contains("Второй рассказ"));return new afoni.projectf.service.Summarizer.Result("Обзор",10,1); }
-            assertFalse(text.contains("Альфа") && text.contains("Бета"));
-            return new afoni.projectf.service.Summarizer.Result(text.contains("Сноска")?"Сноска":text.contains("Бета")?"Бета":"Альфа",10,1);
+            assertEquals("repair_direct_detailed",mode);
+            assertEquals("Черновик Альфа",text);
+            return new afoni.projectf.service.Summarizer.Result("Альфа",10,1);
         };
         new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake).initialize(job,doc);
         for(int i=0;i<30;i++) {
@@ -163,9 +229,159 @@ class ProjectFApplicationTests {
             new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake).tick();
         }
         assertEquals("ready",jdbc.queryForObject("SELECT status FROM summary_jobs WHERE id=?",String.class,job));
-        assertEquals(3,jdbc.queryForObject("SELECT count(*) FROM summary_sections WHERE job_id=? AND summary_text IS NOT NULL",Integer.class,job));
+        assertEquals("Альфа",jdbc.queryForObject("SELECT summary_text FROM summaries WHERE id=(SELECT result_id FROM summary_jobs WHERE id=?)",String.class,job));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=?",Integer.class,job));
         assertEquals(123+(calls.get()-1)*10,jdbc.queryForObject("SELECT tokens_used FROM summary_jobs WHERE id=?",Integer.class,job));
         mvc.perform(delete("/api/documents/"+doc).session(session).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test void fb2SummariesUseBookChaptersAndDropLegacyFootnotesWithoutLosingProgress() throws Exception {
+        var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        String xml="<FictionBook xmlns='http://www.gribuser.ru/xml/fictionbook/2.0'>"+
+                "<description><title-info><book-title>Книга</book-title></title-info></description>"+
+                "<body><section><p>Копирайт.</p></section>"+
+                "<section><title><p>Первая часть</p></title><p>Первый сюжет.</p></section>"+
+                "<section><title><p>Вторая часть</p></title><p>Второй сюжет.</p></section></body>"+
+                "<body name='notes'><section><title><p>1</p></title><p>Сноска один.</p></section></body></FictionBook>";
+        var file=new org.springframework.mock.web.MockMultipartFile("file","story.fb2","application/xml",xml.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var upload=mvc.perform(multipart("/api/documents/upload").file(file).session(session).with(csrf()))
+                .andExpect(status().isAccepted()).andReturn();
+        UUID document=UUID.fromString(JsonPath.read(upload.getResponse().getContentAsString(),"$.id"));
+        var book=jdbc.queryForList("SELECT section_number,title,role,content FROM reader_sections WHERE document_id=? ORDER BY section_number",document);
+        assertEquals(4,book.size());
+        assertEquals("auxiliary",book.get(3).get("role"));
+
+        UUID job=UUID.randomUUID();
+        jdbc.update("INSERT INTO summary_jobs(id,document_id,compression_level,model_name) VALUES (?,?,'medium','synthetic')",job,document);
+        var queue=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,(text,level,model)->new afoni.projectf.service.Summarizer.Result("Кратко.",10));
+        queue.initialize(job,document);
+        assertEquals(4,jdbc.queryForObject("SELECT pipeline_version FROM summary_jobs WHERE id=?",Integer.class,job));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM summary_sections WHERE job_id=?",Integer.class,job));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=?",Integer.class,job));
+        String input=jdbc.queryForObject("SELECT input_text FROM summary_steps WHERE job_id=?",String.class,job);
+        assertTrue(input.contains("Первый сюжет") && input.contains("Второй сюжет"));
+        assertFalse(input.contains("Сноска один") || input.contains("Копирайт"));
+        jdbc.update("DELETE FROM summary_jobs WHERE id=?",job);
+
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
+        String path="/api/documents/"+document+"/summary";
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"short\",\"scope\":\"chapter\",\"sectionNumber\":3}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"short\",\"scope\":\"chapter\",\"sectionNumber\":1}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(get(path+"?level=short&scope=chapter&sectionNumber=1").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.pipelineVersion").value(4));
+        String chapterInput=jdbc.queryForObject("SELECT p.input_text FROM summary_steps p JOIN summary_jobs j ON j.id=p.job_id WHERE j.document_id=? AND j.scope_mode='chapter'",String.class,document);
+        assertTrue(chapterInput.contains("Первый сюжет"));assertFalse(chapterInput.contains("Второй сюжет"));
+        jdbc.update("DELETE FROM summary_jobs WHERE document_id=? AND scope_mode='chapter'",document);
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"short\",\"scope\":\"through_chapter\",\"sectionNumber\":2}"))
+                .andExpect(status().isNoContent());
+        String throughInput=jdbc.queryForObject("SELECT p.input_text FROM summary_steps p JOIN summary_jobs j ON j.id=p.job_id WHERE j.document_id=? AND j.scope_mode='through_chapter'",String.class,document);
+        assertTrue(throughInput.contains("Первый сюжет") && throughInput.contains("Второй сюжет"));
+        assertFalse(throughInput.contains("Сноска один"));
+        jdbc.update("DELETE FROM summary_jobs WHERE document_id=? AND scope_mode='through_chapter'",document);
+
+        UUID legacy=UUID.randomUUID();
+        jdbc.update("INSERT INTO summary_jobs(id,document_id,compression_level,model_name,pipeline_version) VALUES (?,?,'medium','synthetic',2)",legacy,document);
+        for(int i=0;i<book.size();i++) {
+            jdbc.update("INSERT INTO summary_sections(job_id,section_number,heading,category) VALUES (?,?,?,'main')",legacy,i,i==0?"Начало документа":"Глава: "+book.get(i).get("title"));
+            jdbc.update("INSERT INTO summary_steps(job_id,round_number,step_number,section_number,input_text,output_text) VALUES (?,0,?,?,?,?)",
+                    legacy,i,i,book.get(i).get("content"),i==1?"Уже готовый пересказ":null);
+        }
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+        queue.tick();
+        assertEquals(3,jdbc.queryForObject("SELECT pipeline_version FROM summary_jobs WHERE id=?",Integer.class,legacy));
+        assertEquals(java.util.List.of("Глава: Первая часть","Глава: Вторая часть"),jdbc.queryForList("SELECT heading FROM summary_sections WHERE job_id=? ORDER BY section_number",String.class,legacy));
+        assertEquals("Уже готовый пересказ",jdbc.queryForObject("SELECT output_text FROM summary_steps WHERE job_id=? AND section_number=1",String.class,legacy));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=? AND section_number=3",Integer.class,legacy));
+        jdbc.update("UPDATE summary_jobs SET status='failed' WHERE id=?",legacy);
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"medium\"}"))
+                .andExpect(status().isNoContent());
+        assertEquals(4,jdbc.queryForObject("SELECT pipeline_version FROM summary_jobs WHERE id=?",Integer.class,legacy));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=?",Integer.class,legacy));
+        mvc.perform(delete("/api/documents/"+document).session(session).with(csrf())).andExpect(status().isNoContent());
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+    }
+
+    @Test void oversizedMaterialUsesVolumesAndOneFinalSynthesis() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\"Большой материал\",\"content\":\"Начало\"}")).andExpect(status().isCreated());
+        UUID document=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        jdbc.update("UPDATE documents SET original_text=? WHERE id=?","Сюжет и события. ".repeat(50_000),document);
+        UUID job=UUID.randomUUID();
+        jdbc.update("INSERT INTO summary_jobs(id,document_id,compression_level,model_name) VALUES (?,?,'medium','synthetic')",job,document);
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        afoni.projectf.service.Summarizer fake=(input,mode,model)->{
+            assertTrue(input.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=afoni.projectf.service.SummaryQueue.DIRECT_INPUT_BYTES);
+            assertEquals("direct_medium",mode);
+            calls.incrementAndGet();
+            return new afoni.projectf.service.Summarizer.Result("Краткий том.",10,1);
+        };
+        var queue=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake);
+        queue.initialize(job,document);
+        int volumes=jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=? AND round_number=0",Integer.class,job);
+        assertTrue(volumes>1);
+        for(int i=0;i<volumes+3;i++) {
+            jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+            queue.tick();
+        }
+        assertEquals("ready",jdbc.queryForObject("SELECT status FROM summary_jobs WHERE id=?",String.class,job));
+        assertEquals(volumes+1,calls.get());
+        assertEquals(volumes,jdbc.queryForObject("SELECT count(*) FROM summary_sections WHERE job_id=? AND summary_text IS NOT NULL",Integer.class,job));
+        mvc.perform(delete("/api/documents/"+document).session(session).with(csrf())).andExpect(status().isNoContent());
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+    }
+
+    @Test void truncatedDirectAnswerIsVisibleAndRequiresExplicitFullRetry() throws Exception {
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"title\":\"Тест\",\"content\":\"Длинный исходный материал для пересказа\"}"))
+                .andExpect(status().isCreated());
+        UUID document=jdbc.queryForObject("SELECT d.id FROM documents d JOIN users u ON u.id=d.user_id WHERE u.email=?",UUID.class,email);
+        String path="/api/documents/"+document+"/summary";
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"detailed\"}")).andExpect(status().isNoContent());
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        afoni.projectf.service.Summarizer fake=(input,mode,model)->{
+            if(calls.incrementAndGet()==1) {
+                assertEquals("direct_detailed",mode);
+                assertTrue(input.contains("Длинный исходный материал"));
+                throw new afoni.projectf.service.Summarizer.Failure("OUTPUT_LIMIT","Модель исчерпала бюджет ответа; черновик сохранён.",false,1,18000,"Черновик без конца книги.");
+            }
+            assertEquals("direct_detailed",mode);
+            assertTrue(input.contains("Длинный исходный материал"));
+            return new afoni.projectf.service.Summarizer.Result("Полный пересказ источника.",32,1);
+        };
+        var queue=new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake);
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+        queue.tick();
+        mvc.perform(get(path+"?level=detailed").session(session)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("failed"))
+                .andExpect(jsonPath("$.partialText").value("Черновик без конца книги."))
+                .andExpect(jsonPath("$.tokensUsed").value(18000));
+        assertEquals(1,calls.get());
+        mvc.perform(post(path).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"detailed\"}")).andExpect(status().isNoContent());
+        assertNull(jdbc.queryForObject("SELECT p.repair_text FROM summary_steps p JOIN summary_jobs j ON j.id=p.job_id WHERE j.document_id=?",String.class,document));
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+        queue.tick();
+        assertEquals(2,calls.get());
+        mvc.perform(get(path+"?level=detailed").session(session)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ready"))
+                .andExpect(jsonPath("$.text").value("Полный пересказ источника."))
+                .andExpect(jsonPath("$.partialText").doesNotExist());
+        mvc.perform(delete("/api/documents/"+document).session(session).with(csrf())).andExpect(status().isNoContent());
+        jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
     }
 
     @Test
@@ -933,7 +1149,7 @@ class ProjectFApplicationTests {
 
     @Test
     void migrationsAreAppliedOnceAndLongNotesRoundTrip() {
-        assertEquals(24, flyway.info().applied().length);
+        assertEquals(27, flyway.info().applied().length);
         assertEquals(0, flyway.migrate().migrationsExecuted);
         Note note = new Note();
         note.setTitle("Migration test");
@@ -985,7 +1201,7 @@ class ProjectFApplicationTests {
                 .locations("classpath:db/migration").baselineVersion("0").load();
         // Explicit adoption is tested; normal startup never baselines automatically.
         legacy.baseline();
-        assertEquals(24, legacy.migrate().migrationsExecuted);
+        assertEquals(27, legacy.migrate().migrationsExecuted);
         assertEquals("Keep this record", jdbc.queryForObject("SELECT content FROM legacy_test.note WHERE id = 1", String.class));
         assertEquals("text", jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_test' AND table_name = 'note' AND column_name = 'content'", String.class));
     }

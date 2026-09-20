@@ -1,7 +1,6 @@
 import { useCallback, useDeferredValue, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive,
   ArrowUpRight,
   FileText,
   LayoutGrid,
@@ -15,15 +14,15 @@ import {
 } from 'lucide-react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { documentsApi, type DocumentListFilters } from '../api/documents'
-import { MaterialContexts } from '../components/MaterialContexts'
-import { PreparationStatus } from '../components/PreparationStatus'
+import { SummaryPanel } from '../components/SummaryPanel'
 import { ProcessingBadge } from '../components/ProcessingBadge'
 import { Button } from '../components/ui/button'
+import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
 import { SideDrawer } from '../components/ui/side-drawer'
 import { DocumentOriginalViewer } from '../reader/DocumentOriginalViewer'
 
-type WorkspaceTab = 'content' | 'structure' | 'processing' | 'contexts'
+type WorkspaceTab = 'content' | 'structure' | 'processing'
 type DocumentView = 'grid' | 'list'
 
 function formatFileSize(value: number) {
@@ -78,8 +77,7 @@ export function DocumentsPage() {
           </p>
           <h1 className="mt-3 text-3xl font-semibold">Документы</h1>
           <p className="mt-3 text-muted">
-            TXT, MD, PDF и DOCX, их структура, сохранённые контексты и
-            результаты обработки.
+            TXT, MD, PDF и DOCX: содержимое, структура и изложение.
           </p>
         </div>
         <Button asChild>
@@ -285,10 +283,6 @@ export function DocumentPage() {
     queryKey: ['documents', 'detail', id],
     queryFn: ({ signal }) => documentsApi.get(id, signal),
   })
-  const documents = useQuery({
-    queryKey: ['documents', 'list', 0],
-    queryFn: ({ signal }) => documentsApi.list(0, signal),
-  })
   const remove = useMutation({
     mutationFn: () => documentsApi.remove(id),
     onSuccess: async () => {
@@ -320,33 +314,7 @@ export function DocumentPage() {
           </Button>
         </div>
       ) : (
-        <div className="mt-6 grid min-w-0 gap-5 lg:grid-cols-[230px_minmax(0,1fr)]">
-          <aside className="h-fit rounded-2xl border border-line bg-surface p-3 lg:sticky lg:top-6">
-            <p className="px-2 py-2 text-xs font-semibold uppercase tracking-wider text-muted">
-              Документы
-            </p>
-            <nav className="mt-1 max-h-[55vh] space-y-1 overflow-y-auto">
-              {documents.data?.items.map((document) => (
-                <Link
-                  key={document.id}
-                  to={`/documents/${document.id}`}
-                  onClick={() => {
-                    setTextPage(0)
-                    setDocumentPosition({ documentId: document.id, offset: 0 })
-                  }}
-                  className={`block rounded-xl px-3 py-2.5 text-sm transition ${document.id === id ? 'bg-accent-soft font-medium text-accent' : 'text-secondary hover:bg-subtle'}`}
-                >
-                  <span className="line-clamp-2">{document.title}</span>
-                  <span className="mt-1 block text-[10px] uppercase text-muted">
-                    {document.sourceType}
-                  </span>
-                </Link>
-              ))}
-            </nav>
-            <Button asChild variant="outline" className="mt-3 w-full">
-              <Link to="/">Добавить документ</Link>
-            </Button>
-          </aside>
+        <div className="mt-6 min-w-0">
           <main className="min-w-0">
             <header className="rounded-2xl border border-line bg-surface p-5 sm:p-7">
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -378,13 +346,13 @@ export function DocumentPage() {
                   [
                     ['content', 'Содержимое', FileText],
                     ['structure', 'Структура', ListTree],
-                    ['processing', 'Обработка', Sparkles],
-                    ['contexts', 'Контексты', Archive],
+                    ['processing', 'Изложение', Sparkles],
                   ] as const
                 ).map(([value, label, Icon]) => (
                   <button
                     key={value}
                     type="button"
+                    aria-pressed={tab === value}
                     className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2 text-sm transition ${tab === value ? 'bg-accent-soft font-medium text-accent' : 'text-muted hover:bg-subtle'}`}
                     onClick={() => setTab(value)}
                   >
@@ -477,31 +445,24 @@ export function DocumentPage() {
                   </div>
                 </div>
               )}
-              {tab === 'processing' && <PreparationStatus id={id} />}
-              {tab === 'contexts' && (
-                <MaterialContexts
-                  materialId={id}
-                  materialType={query.data.materialType}
-                  sections={query.data.sections}
-                />
-              )}
+              {tab === 'processing' && <SummaryPanel id={id} />}
             </section>
           </main>
         </div>
       )}
       {confirmDelete && (
-        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 p-5">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="delete-document-title"
-            className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl"
-          >
+        <ModalDialog
+          labelledBy="delete-document-title"
+          role="alertdialog"
+          closeDisabled={remove.isPending}
+          onClose={() => setConfirmDelete(false)}
+          className="w-full max-w-md rounded-2xl border border-line bg-surface p-6 shadow-2xl"
+        >
             <h2 id="delete-document-title" className="text-lg font-semibold">
               Удалить документ?
             </h2>
             <p className="mt-3 text-sm leading-6 text-muted">
-              Вместе с документом удалятся его контексты и результаты обработки.
+              Вместе с документом удалятся сохранённые данные и результаты изложения.
               Восстановить их нельзя.
             </p>
             <div className="mt-6 flex gap-3">
@@ -525,8 +486,7 @@ export function DocumentPage() {
                 {remove.error.message}
               </p>
             )}
-          </div>
-        </div>
+        </ModalDialog>
       )}
     </>
   )

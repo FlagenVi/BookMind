@@ -16,11 +16,17 @@ export function ChapterResult({
   level,
   section,
   active,
+  scope,
+  scopeSectionNumber,
+  direct,
 }: {
   id: string
   level: string
   section: SummarySection
   active: boolean
+  scope?: string
+  scopeSectionNumber?: number
+  direct?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -30,13 +36,15 @@ export function ChapterResult({
       'summary',
       id,
       level,
+      scope,
+      scopeSectionNumber,
       'section',
       section.number,
       offset,
     ],
     queryFn: ({ signal }) =>
       request<{ number: number; text: string | null }[]>(
-        `/documents/${id}/summary/sections/${section.number}?level=${level}&offset=${offset}`,
+        `/documents/${id}/summary/sections/${section.number}?level=${level}&scope=${scope ?? 'whole'}&sectionNumber=${scopeSectionNumber ?? -1}&offset=${offset}`,
         { signal },
       ),
     enabled: open && !section.text,
@@ -53,7 +61,7 @@ export function ChapterResult({
           {section.category === 'ancillary' ? ' · Справочный раздел' : ''} ·{' '}
           {section.text
             ? 'Готово'
-            : `${section.doneParts}/${section.totalParts} фрагментов`}
+            : direct ? `${section.doneParts}/${section.totalParts} запросов` : `${section.doneParts}/${section.totalParts} фрагментов`}
         </span>
       </summary>
       {open && (
@@ -63,8 +71,9 @@ export function ChapterResult({
           ) : (
             <>
               <p className="text-muted">
-                Промежуточные пересказы фрагментов. Изложение раздела появится
-                после их объединения.
+                {direct
+                  ? 'Изложение этой части появится после ответа модели.'
+                  : 'Промежуточные пересказы фрагментов. Изложение раздела появится после их объединения.'}
               </p>
               {fragments.isPending && <p role="status">Загрузка…</p>}
               {fragments.isError && (

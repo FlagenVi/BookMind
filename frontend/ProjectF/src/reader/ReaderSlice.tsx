@@ -10,10 +10,10 @@ import { segmentReaderText } from './textSegments'
 import type { ReaderUnit } from './virtualGeometry'
 
 const markColors: Record<Highlight['color'], string> = {
-  yellow: 'bg-amber-200/70 text-inherit',
-  green: 'bg-emerald-200/70 text-inherit',
-  blue: 'bg-sky-200/70 text-inherit',
-  pink: 'bg-pink-200/70 text-inherit',
+  yellow: 'bg-amber-200/80 text-[#292722]',
+  green: 'bg-emerald-200/80 text-[#292722]',
+  blue: 'bg-sky-200/80 text-[#292722]',
+  pink: 'bg-pink-200/80 text-[#292722]',
 }
 
 function DecoratedText({
@@ -47,9 +47,9 @@ function DecoratedText({
     const className = [
       segment.highlight ? markColors[segment.highlight.color] : '',
       segment.search === 'active'
-        ? 'bg-orange-300/85 ring-1 ring-orange-500/70'
+        ? 'bg-orange-300/90 text-[#292722] ring-1 ring-orange-500/70'
         : segment.search === 'visible'
-          ? 'bg-amber-200/45'
+          ? 'bg-amber-200/80 text-[#292722]'
           : '',
       segment.highlight || segment.search ? 'rounded-sm' : '',
     ]

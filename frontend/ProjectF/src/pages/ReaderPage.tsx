@@ -5,13 +5,14 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
-  Archive,
   BookOpen,
+  BookText,
   Bookmark as BookmarkIcon,
   ChevronDown,
   ChevronLeft,
@@ -32,7 +33,7 @@ import {
   Undo2,
   X,
 } from 'lucide-react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   booksApi,
   type BookSearchItem,
@@ -43,6 +44,8 @@ import {
   type SectionLink,
 } from '../api/books'
 import { ApiError } from '../api/client'
+import { BookChatPanel } from '../components/BookChatPanel'
+import { SummaryPanel } from '../components/SummaryPanel'
 import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
@@ -159,11 +162,24 @@ function readSidebarTab() {
   }
 }
 
+function handleTabKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+  const current = tabs.indexOf(event.target as HTMLButtonElement)
+  if (current < 0 || tabs.length === 0) return
+  event.preventDefault()
+  const next = event.key === 'Home' ? 0
+    : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
+  tabs[next].focus()
+  tabs[next].click()
+}
+
 const markColors: Record<Highlight['color'], string> = {
-  yellow: 'bg-amber-200/70 text-inherit',
-  green: 'bg-emerald-200/70 text-inherit',
-  blue: 'bg-sky-200/70 text-inherit',
-  pink: 'bg-pink-200/70 text-inherit',
+  yellow: 'bg-amber-200/80 text-[#292722]',
+  green: 'bg-emerald-200/80 text-[#292722]',
+  blue: 'bg-sky-200/80 text-[#292722]',
+  pink: 'bg-pink-200/80 text-[#292722]',
 }
 
 const markColorLabels: Record<Highlight['color'], string> = {
@@ -250,7 +266,7 @@ function SearchExcerpt({ item }: { item: BookSearchItem }) {
   return (
     <>
       {item.excerpt.slice(0, start)}
-      <mark className="rounded-sm bg-amber-200/70 text-inherit">
+      <mark className="rounded-sm bg-amber-200/80 text-[#292722]">
         {item.excerpt.slice(start, end)}
       </mark>
       {item.excerpt.slice(end)}
@@ -260,6 +276,22 @@ function SearchExcerpt({ item }: { item: BookSearchItem }) {
 
 export function ReaderPage() {
   const { id = '' } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const assistantOpen = searchParams.get('panel') === 'book' || searchParams.get('summary') === '1'
+  const assistantTab = searchParams.get('tab') === 'chat' ? 'chat' : 'summary'
+  const setAssistant = (open: boolean, tab: 'summary' | 'chat' = assistantTab) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      next.delete('summary')
+      if (open) {
+        next.set('panel', 'book')
+        next.set('tab', tab)
+      } else {
+        next.delete('panel')
+      }
+      return next
+    }, { replace: true })
+  }
   const queryClient = useQueryClient()
   const [preferences, setPreferences] = useState(readReaderPreferences)
   const [activeOffset, setActiveOffset] = useState(0)
@@ -270,6 +302,7 @@ export function ReaderPage() {
   const [extraTocOpen, setExtraTocOpen] = useState(false)
   const [collapsedToc, setCollapsedToc] = useState<Set<number>>(() => new Set())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsDialog = useRef<HTMLElement>(null)
   const [draft, setDraft] = useState<SelectionDraft | null>(null)
   const [note, setNote] = useState('')
   const [color, setColor] = useState<Highlight['color']>('yellow')
@@ -290,6 +323,7 @@ export function ReaderPage() {
     useState<ScrollNavigation | null>(null)
   const [chromeVisible, setChromeVisible] = useState(true)
   const [navigationOpen, setNavigationOpen] = useState(false)
+  const navigationDialog = useRef<HTMLElement>(null)
   const [jumpPercent, setJumpPercent] = useState('')
   const [jumpOffset, setJumpOffset] = useState('')
   const [jumpError, setJumpError] = useState('')
@@ -358,6 +392,24 @@ export function ReaderPage() {
   useEffect(() => {
     writeReaderPreferences(preferences)
   }, [preferences])
+  useEffect(() => {
+    if (!settingsOpen) return
+    const opener = document.activeElement as HTMLElement | null
+    const frame = requestAnimationFrame(() => settingsDialog.current?.focus())
+    return () => {
+      cancelAnimationFrame(frame)
+      if (opener?.isConnected) opener.focus()
+    }
+  }, [settingsOpen])
+  useEffect(() => {
+    if (!navigationOpen) return
+    const opener = document.activeElement as HTMLElement | null
+    const frame = requestAnimationFrame(() => navigationDialog.current?.focus())
+    return () => {
+      cancelAnimationFrame(frame)
+      if (opener?.isConnected) opener.focus()
+    }
+  }, [navigationOpen])
   useEffect(() => {
     const timer = window.setTimeout(() => {
       const nextQuery = searchInput.trim()
@@ -895,10 +947,7 @@ export function ReaderPage() {
     sepia: 'bg-[#f3e6ca] text-[#483b2b]',
     night: 'bg-[#14191f] text-[#d9d6cf]',
   }[preferences.theme]
-  const fontClass =
-    preferences.font === 'serif'
-      ? "font-[Georgia,'Times_New_Roman',serif]"
-      : 'font-sans'
+  const fontClass = `reader-font-${preferences.font}`
 
   const updateReaderOffset = useCallback(
     (requestedOffset: number, source: 'user' | 'programmatic') => {
@@ -1368,6 +1417,8 @@ export function ReaderPage() {
     preferences.font,
     preferences.fontSize,
     preferences.lineHeight,
+    preferences.pageMargin,
+    preferences.textAlign,
     section.data,
     currentMeta,
   ])
@@ -1405,6 +1456,7 @@ export function ReaderPage() {
           leftPanel !== null ||
           settingsOpen ||
           navigationOpen ||
+          assistantOpen ||
           draft !== null ||
           bookmarkDraft !== null ||
           highlightDraft !== null ||
@@ -1418,11 +1470,25 @@ export function ReaderPage() {
         setDeleteDraft(null)
         window.getSelection()?.removeAllRanges()
         if (hadOverlay) event.preventDefault()
+        else if (!chromeVisible) {
+          setChromeVisible(true)
+          event.preventDefault()
+        }
+        return
+      }
+      if (event.key === 'Tab' && !chromeVisible) {
+        event.preventDefault()
+        setChromeVisible(true)
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('.reader-shell header a')?.focus())
         return
       }
       const target = event.target as HTMLElement | null
       if (
-        target?.matches('input, textarea, select, [contenteditable="true"]') ||
+        assistantOpen ||
+        leftPanel !== null ||
+        settingsOpen ||
+        navigationOpen ||
+        target?.closest('button, a, input, textarea, select, [role="dialog"], [role="tab"], [contenteditable="true"]') ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey
@@ -1453,6 +1519,8 @@ export function ReaderPage() {
     preferences.mode,
     section.data,
     settingsOpen,
+    assistantOpen,
+    chromeVisible,
   ])
 
   if (manifest.isPending || savedProgress.isPending)
@@ -1477,10 +1545,12 @@ export function ReaderPage() {
     return <p role="status">Восстанавливаем место чтения…</p>
 
   return (
-    <div className="reader-shell min-h-screen">
-      <header
-        className={`sticky top-0 z-30 flex min-h-16 items-center gap-2 border-b border-line bg-surface/95 px-3 backdrop-blur transition duration-300 md:px-5 ${chromeVisible ? '' : 'pointer-events-none -translate-y-full opacity-0'}`}
-      >
+    <div
+      className="reader-shell min-h-screen bg-page text-foreground"
+      data-reader-theme={preferences.theme}
+    >
+      {chromeVisible && (
+        <header className="sticky top-0 z-30 flex min-h-16 items-center gap-1 border-b border-line bg-page/95 px-2 backdrop-blur sm:gap-2 sm:px-3 md:px-5">
         <Button
           asChild
           variant="outline"
@@ -1495,6 +1565,8 @@ export function ReaderPage() {
           variant="outline"
           className="px-3"
           aria-label="Боковая панель"
+          aria-expanded={leftPanel !== null}
+          aria-controls={leftPanel ? 'reader-sidebar-panel' : undefined}
           onClick={() => {
             if (leftPanel) setLeftPanel(null)
             else {
@@ -1510,7 +1582,7 @@ export function ReaderPage() {
         </Button>
         <Button
           variant="outline"
-          className="px-3"
+          className="hidden px-3 sm:inline-flex"
           aria-label="Назад к предыдущему месту"
           title="Назад к предыдущему месту"
           disabled={!navigationHistory.length}
@@ -1538,15 +1610,18 @@ export function ReaderPage() {
           </Button>
         )}
         <Button
-          asChild
           variant="outline"
-          className="hidden px-3 sm:inline-flex"
-          aria-label="Контексты книги"
-          title="Контексты книги"
+          className="px-3"
+          aria-label="Помощник по книге"
+          title="Изложение и чат по книге"
+          aria-expanded={assistantOpen}
+          onClick={() => {
+            setSettingsOpen(false)
+            setNavigationOpen(false)
+            setAssistant(!assistantOpen)
+          }}
         >
-          <Link to={`/library/${id}/contexts`}>
-            <Archive size={18} />
-          </Link>
+          <BookText size={18} />
         </Button>
         <Button
           variant="outline"
@@ -1566,6 +1641,8 @@ export function ReaderPage() {
           variant="outline"
           className="px-3"
           aria-label="Настройки чтения"
+          aria-expanded={settingsOpen}
+          aria-controls={settingsOpen ? 'reader-settings' : undefined}
           onClick={() => {
             setSettingsOpen((value) => !value)
             setNavigationOpen(false)
@@ -1573,15 +1650,52 @@ export function ReaderPage() {
         >
           <Settings2 size={18} />
         </Button>
-      </header>
+        </header>
+      )}
 
-      <div className="relative flex min-h-[calc(100vh-4rem)]">
+      {assistantOpen && (
+        <ModalDialog
+          labelledBy="reader-assistant-title"
+          onClose={() => setAssistant(false)}
+          placement="right"
+          className={`project-scrollbar h-dvh w-full max-w-[560px] overscroll-contain border-l border-line bg-page p-4 text-foreground shadow-2xl sm:p-6 ${assistantTab === 'chat' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-semibold uppercase tracking-wider text-accent">Книга</p>
+              <h2 id="reader-assistant-title" className="mt-1 truncate text-lg font-semibold">{manifest.data.title}</h2>
+            </div>
+            <Button variant="outline" className="shrink-0 px-3" aria-label="Закрыть помощника" onClick={() => setAssistant(false)}>
+              <X size={18} />
+            </Button>
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-2" role="tablist" aria-label="Помощник по книге" onKeyDown={handleTabKeys}>
+            <button id="reader-assistant-summary-tab" type="button" role="tab" tabIndex={assistantTab === 'summary' ? 0 : -1} aria-controls="reader-assistant-panel" aria-selected={assistantTab === 'summary'} className={`min-h-11 rounded-xl px-3 py-2 text-sm font-semibold ${assistantTab === 'summary' ? 'bg-accent-soft text-accent' : 'bg-surface text-muted'}`} onClick={() => setAssistant(true, 'summary')}>Изложение</button>
+            <button id="reader-assistant-chat-tab" type="button" role="tab" tabIndex={assistantTab === 'chat' ? 0 : -1} aria-controls="reader-assistant-panel" aria-selected={assistantTab === 'chat'} className={`min-h-11 rounded-xl px-3 py-2 text-sm font-semibold ${assistantTab === 'chat' ? 'bg-accent-soft text-accent' : 'bg-surface text-muted'}`} onClick={() => setAssistant(true, 'chat')}>Чат</button>
+          </div>
+          <div id="reader-assistant-panel" role="tabpanel" aria-labelledby={`reader-assistant-${assistantTab}-tab`} className={assistantTab === 'chat' ? 'flex min-h-0 flex-1 flex-col' : undefined}>
+          {assistantTab === 'summary' ? (
+            <SummaryPanel key={id} id={id} chapters={manifest.data.sections} />
+          ) : (
+            <BookChatPanel key={id} bookId={id} onOpenSource={(offset, label) => {
+              setAssistant(false)
+              navigateToOffset(offset, { source: 'internal', label: `Чат: ${label}`, preferSmooth: false })
+            }} />
+          )}
+          </div>
+        </ModalDialog>
+      )}
+
+      <div className={`relative flex ${chromeVisible ? 'min-h-[calc(100dvh-4rem)]' : 'min-h-dvh'}`}>
         {leftPanel && (
           <aside className="absolute inset-y-0 left-0 z-20 w-[min(88vw,340px)] border-r border-line bg-surface p-4 shadow-xl md:relative md:shadow-none">
             <div className="flex items-start justify-between gap-2">
-              <div className="grid flex-1 grid-cols-3 gap-1" role="tablist">
+              <div className="grid flex-1 grid-cols-3 gap-1" role="tablist" aria-label="Боковая панель книги" onKeyDown={handleTabKeys}>
                 <button
+                  id="reader-sidebar-toc-tab"
                   role="tab"
+                  tabIndex={leftPanel === 'toc' ? 0 : -1}
+                  aria-controls="reader-sidebar-panel"
                   aria-selected={leftPanel === 'toc'}
                   className={`rounded-lg px-2 py-2 text-xs sm:text-sm ${leftPanel === 'toc' ? 'bg-accent-soft text-accent' : 'text-muted'}`}
                   onClick={() => {
@@ -1593,7 +1707,10 @@ export function ReaderPage() {
                   Оглавление
                 </button>
                 <button
+                  id="reader-sidebar-marks-tab"
                   role="tab"
+                  tabIndex={leftPanel === 'marks' ? 0 : -1}
+                  aria-controls="reader-sidebar-panel"
                   aria-selected={leftPanel === 'marks'}
                   className={`rounded-lg px-2 py-2 text-xs sm:text-sm ${leftPanel === 'marks' ? 'bg-accent-soft text-accent' : 'text-muted'}`}
                   onClick={() => selectSidebarTab('marks')}
@@ -1601,7 +1718,10 @@ export function ReaderPage() {
                   Отметки
                 </button>
                 <button
+                  id="reader-sidebar-search-tab"
                   role="tab"
+                  tabIndex={leftPanel === 'search' ? 0 : -1}
+                  aria-controls="reader-sidebar-panel"
                   aria-selected={leftPanel === 'search'}
                   className={`rounded-lg px-2 py-2 text-xs sm:text-sm ${leftPanel === 'search' ? 'bg-accent-soft text-accent' : 'text-muted'}`}
                   onClick={() => selectSidebarTab('search')}
@@ -1616,6 +1736,7 @@ export function ReaderPage() {
                 <X size={19} />
               </button>
             </div>
+            <div id="reader-sidebar-panel" role="tabpanel" aria-labelledby={`reader-sidebar-${leftPanel}-tab`}>
             {leftPanel === 'toc' ? (
               <nav
                 ref={tocPanel}
@@ -1970,12 +2091,13 @@ export function ReaderPage() {
                 )}
               </section>
             )}
+            </div>
           </aside>
         )}
 
         <main
           ref={readerViewport}
-          className={`project-scrollbar relative h-[calc(100vh-4rem)] min-w-0 flex-1 ${themeClass} ${preferences.mode === 'scroll' || manifest.data.format === 'pdf' || manifest.data.format === 'docx' ? 'overflow-auto' : 'overflow-hidden'}`}
+          className={`project-scrollbar relative min-w-0 flex-1 ${chromeVisible ? 'h-[calc(100dvh-4rem)]' : 'h-dvh'} ${themeClass} ${preferences.mode === 'scroll' || manifest.data.format === 'pdf' || manifest.data.format === 'docx' ? 'overflow-auto' : 'overflow-hidden'}`}
           style={{
             overflowAnchor: preferences.mode === 'scroll' ? 'none' : undefined,
           }}
@@ -2032,9 +2154,12 @@ export function ReaderPage() {
         >
           {settingsOpen && (
             <section
+              id="reader-settings"
+              ref={settingsDialog}
               role="dialog"
               aria-label="Настройки чтения"
-              className="fixed right-3 top-20 z-40 max-h-[calc(100vh-5.75rem)] w-[min(92vw,360px)] overflow-y-auto overscroll-contain rounded-2xl border border-black/10 bg-surface p-5 text-foreground shadow-2xl"
+              tabIndex={-1}
+              className="fixed right-3 top-20 z-40 max-h-[calc(100vh-5.75rem)] w-[min(92vw,360px)] overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 text-foreground shadow-2xl"
             >
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Оформление</h2>
@@ -2047,7 +2172,7 @@ export function ReaderPage() {
               </div>
               {!['pdf', 'docx'].includes(manifest.data.format) ? (
                 <>
-                  <div className="mt-5 grid grid-cols-3 gap-2">
+                  <div className="mt-5 grid grid-cols-3 gap-2" role="group" aria-label="Режим чтения">
                     {(
                       [
                         ['scroll', ScrollText, 'Прокрутка'],
@@ -2057,6 +2182,8 @@ export function ReaderPage() {
                     ).map(([mode, Icon, label]) => (
                       <button
                         key={mode}
+                        type="button"
+                        aria-pressed={preferences.mode === mode}
                         className={`rounded-xl border p-3 text-xs ${preferences.mode === mode ? 'border-accent-line bg-accent-soft text-accent' : 'border-line'}`}
                         onClick={() =>
                           setPreferences((value) => ({ ...value, mode }))
@@ -2071,9 +2198,9 @@ export function ReaderPage() {
                     Листайте клавишами ← → или Page Up/Page Down. Нажатие по
                     центру страницы скрывает панели.
                   </p>
-                  <label className="mt-5 block text-sm font-medium">
+                  <p className="mt-5 block text-sm font-medium">
                     Размер шрифта
-                  </label>
+                  </p>
                   <div className="mt-2 flex items-center gap-3">
                     <Button
                       variant="outline"
@@ -2098,17 +2225,18 @@ export function ReaderPage() {
                       onClick={() =>
                         setPreferences((v) => ({
                           ...v,
-                          fontSize: Math.min(32, v.fontSize + 1),
+                          fontSize: Math.min(34, v.fontSize + 1),
                         }))
                       }
                     >
                       <Plus size={16} />
                     </Button>
                   </div>
-                  <label className="mt-4 block text-sm font-medium">
+                  <label htmlFor="reader-font" className="mt-4 block text-sm font-medium">
                     Шрифт
                   </label>
                   <NativeSelect
+                    id="reader-font"
                     containerClassName="mt-2 w-full"
                     className="w-full rounded-xl border border-line px-3 py-2"
                     value={preferences.font}
@@ -2119,17 +2247,20 @@ export function ReaderPage() {
                       }))
                     }
                   >
-                    <option value="serif">С засечками</option>
-                    <option value="sans">Без засечек</option>
+                    <option value="serif">Georgia — с засечками</option>
+                    <option value="classic">Palatino — книжный</option>
+                    <option value="sans">Системный — без засечек</option>
+                    <option value="readable">Verdana — разборчивый</option>
                   </NativeSelect>
-                  <label className="mt-4 block text-sm font-medium">
+                  <label htmlFor="reader-line-height" className="mt-4 block text-sm font-medium">
                     Межстрочный интервал: {preferences.lineHeight.toFixed(1)}
                   </label>
                   <input
+                    id="reader-line-height"
                     className="mt-2 w-full"
                     type="range"
-                    min="1.2"
-                    max="2"
+                    min="1.3"
+                    max="2.2"
                     step="0.1"
                     value={preferences.lineHeight}
                     onChange={(event) =>
@@ -2139,15 +2270,16 @@ export function ReaderPage() {
                       }))
                     }
                   />
-                  <label className="mt-4 block text-sm font-medium">
+                  <label htmlFor="reader-width" className="mt-4 block text-sm font-medium">
                     Ширина текста: {preferences.width}px
                   </label>
                   <input
+                    id="reader-width"
                     className="mt-2 w-full"
                     type="range"
-                    min="480"
-                    max="960"
-                    step="40"
+                    min="520"
+                    max="1100"
+                    step="20"
                     value={preferences.width}
                     onChange={(event) =>
                       setPreferences((v) => ({
@@ -2156,6 +2288,40 @@ export function ReaderPage() {
                       }))
                     }
                   />
+                  <label htmlFor="reader-page-margin" className="mt-4 block text-sm font-medium">
+                    Поля страницы: {preferences.pageMargin}px
+                  </label>
+                  <input
+                    id="reader-page-margin"
+                    className="mt-2 w-full"
+                    type="range"
+                    min="16"
+                    max="96"
+                    step="8"
+                    value={preferences.pageMargin}
+                    onChange={(event) =>
+                      setPreferences((v) => ({
+                        ...v,
+                        pageMargin: Number(event.target.value),
+                      }))
+                    }
+                  />
+                  <div className="mt-4" role="group" aria-label="Выравнивание текста">
+                    <p className="text-sm font-medium">Выравнивание текста</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {([['left', 'По левому краю'], ['justify', 'По ширине']] as const).map(([align, label]) => (
+                        <button
+                          key={align}
+                          type="button"
+                          aria-pressed={preferences.textAlign === align}
+                          className={`min-h-11 rounded-xl border px-2 py-2 text-sm ${preferences.textAlign === align ? 'border-accent-line bg-accent-soft text-accent' : 'border-line'}`}
+                          onClick={() => setPreferences((value) => ({ ...value, textAlign: align }))}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </>
               ) : (
                 <p className="mt-4 text-sm text-muted">
@@ -2163,10 +2329,10 @@ export function ReaderPage() {
                   просмотрщика.
                 </p>
               )}
-              <label className="mt-5 block text-sm font-medium">
+              <p className="mt-5 block text-sm font-medium">
                 Тема страницы
-              </label>
-              <div className="mt-2 grid grid-cols-3 gap-2">
+              </p>
+              <div className="mt-2 grid grid-cols-3 gap-2" role="group" aria-label="Тема страницы">
                 {(
                   [
                     ['paper', 'Белая'],
@@ -2176,6 +2342,8 @@ export function ReaderPage() {
                 ).map(([theme, label]) => (
                   <button
                     key={theme}
+                    type="button"
+                    aria-pressed={preferences.theme === theme}
                     className={`rounded-xl border px-2 py-3 text-sm ${preferences.theme === theme ? 'border-accent-line bg-accent-soft text-accent' : 'border-line'}`}
                     onClick={() =>
                       setPreferences((value) => ({ ...value, theme }))
@@ -2258,12 +2426,13 @@ export function ReaderPage() {
               <div
                 ref={readingArea}
                 onMouseUp={captureSelection}
-                className={`mx-auto px-4 sm:px-6 md:px-12 ${preferences.mode === 'scroll' ? `min-h-full py-8 sm:py-12 ${themeClass}` : 'h-[calc(100vh-8rem)] py-5 sm:py-8'}`}
+                className={`mx-auto reader-text-${preferences.textAlign} ${preferences.mode === 'scroll' ? `min-h-full py-8 sm:py-12 ${themeClass}` : `${chromeVisible ? 'h-[calc(100dvh-8rem)]' : 'h-dvh'} py-5 sm:py-8`}`}
                 style={{
                   maxWidth:
                     preferences.mode === 'spread'
-                      ? preferences.width * 2 + 150
-                      : preferences.width + 100,
+                      ? preferences.width * 2 + preferences.pageMargin * 2 + 50
+                      : preferences.width + preferences.pageMargin * 2,
+                  paddingInline: `min(${preferences.pageMargin}px, 12vw)`,
                 }}
               >
                 {preferences.mode === 'scroll' ? (
@@ -2283,7 +2452,7 @@ export function ReaderPage() {
                     fontSize={preferences.fontSize}
                     lineHeight={preferences.lineHeight}
                     width={preferences.width}
-                    layoutKey={`${preferences.font}:${preferences.fontSize}:${preferences.lineHeight}:${preferences.width}`}
+                    layoutKey={`${preferences.font}:${preferences.fontSize}:${preferences.lineHeight}:${preferences.width}:${preferences.pageMargin}:${preferences.textAlign}`}
                   />
                 ) : (
                   <div
@@ -2592,9 +2761,12 @@ export function ReaderPage() {
 
               {navigationOpen && (
                 <section
+                  id="reader-navigation"
+                  ref={navigationDialog}
                   role="dialog"
                   aria-label="Переход по книге"
-                  className="fixed bottom-20 left-1/2 z-40 max-h-[calc(100vh-6rem)] w-[min(92vw,420px)] -translate-x-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-black/10 bg-surface p-5 text-foreground shadow-2xl"
+                  tabIndex={-1}
+                  className="fixed bottom-20 left-1/2 z-40 max-h-[calc(100vh-6rem)] w-[min(92vw,420px)] -translate-x-1/2 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-surface p-5 text-foreground shadow-2xl"
                 >
                   <div className="flex items-center justify-between gap-4">
                     <h2 className="font-semibold">Переход по книге</h2>
@@ -2706,13 +2878,12 @@ export function ReaderPage() {
                 </section>
               )}
 
-              <footer
-                className={`sticky bottom-0 z-10 flex items-center gap-3 border-t border-black/10 bg-inherit px-4 py-3 transition duration-300 ${chromeVisible ? '' : 'pointer-events-none translate-y-full opacity-0'}`}
-              >
+              {chromeVisible && (
+                <footer className="sticky bottom-0 z-10 flex items-center gap-3 border-t border-line bg-inherit px-4 py-3">
                 <Button
                   variant="outline"
                   className="px-3"
-                  aria-label="Назад"
+                  aria-label="Назад по книге"
                   disabled={activeOffset <= 0}
                   onClick={() => move(-1)}
                 >
@@ -2720,6 +2891,10 @@ export function ReaderPage() {
                 </Button>
                 <button
                   className="min-w-0 flex-1"
+                  type="button"
+                  aria-label="Перейти к проценту или позиции в книге"
+                  aria-expanded={navigationOpen}
+                  aria-controls={navigationOpen ? 'reader-navigation' : undefined}
                   onClick={() => {
                     setNavigationOpen((value) => {
                       if (!value) {
@@ -2733,7 +2908,7 @@ export function ReaderPage() {
                   }}
                   title="Перейти к проценту или позиции"
                 >
-                  <div className="h-1.5 overflow-hidden rounded-full bg-black/10">
+                  <div className="h-1.5 overflow-hidden rounded-full bg-subtle">
                     <div
                       className="h-full rounded-full bg-teal-600"
                       style={{ width: `${progress}%` }}
@@ -2744,26 +2919,25 @@ export function ReaderPage() {
                       ? `${progress}% · позиция ${activeOffset.toLocaleString('ru-RU')} из ${manifest.data.textLength.toLocaleString('ru-RU')}`
                       : `стр. ${pageIndex + 1}${pagesVisible === 2 && pageIndex + 2 <= pageCount ? `–${pageIndex + 2}` : ''} из ${pageCount} · ${progress}%`}
                   </span>
-                  {progressSync !== 'saved' && (
+                  {(progressSync === 'offline' || progressSync === 'conflict') && (
                     <span className="mt-0.5 block text-[11px] opacity-70">
                       {progressSync === 'offline'
                         ? 'Позиция сохранена на устройстве'
-                        : progressSync === 'conflict'
-                          ? 'Сверяем позицию с другой вкладкой…'
-                          : 'Сохраняем позицию…'}
+                        : 'Сверяем позицию с другой вкладкой…'}
                     </span>
                   )}
                 </button>
                 <Button
                   variant="outline"
                   className="px-3"
-                  aria-label="Вперёд"
+                  aria-label="Вперёд по книге"
                   disabled={activeOffset >= manifest.data.textLength}
                   onClick={() => move(1)}
                 >
                   <ChevronRight size={18} />
                 </Button>
-              </footer>
+                </footer>
+              )}
             </>
           )}
         </main>

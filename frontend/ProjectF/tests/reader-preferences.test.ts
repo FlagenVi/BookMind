@@ -29,6 +29,8 @@ test('reader preferences reject unknown values and clamp numeric settings', () =
       fontSize: 99,
       lineHeight: 0.5,
       width: 5000,
+      pageMargin: 999,
+      textAlign: 'diagonal',
     }),
   )
   assert.deepEqual(readReaderPreferences(), {
@@ -38,6 +40,8 @@ test('reader preferences reject unknown values and clamp numeric settings', () =
     fontSize: 34,
     lineHeight: 1.3,
     width: 1100,
+    pageMargin: 96,
+    textAlign: defaultReaderPreferences.textAlign,
   })
 })
 
@@ -47,8 +51,25 @@ test('reader preferences round trip through browser storage', () => {
     ...defaultReaderPreferences,
     mode: 'spread' as const,
     fontSize: 24,
+    font: 'readable' as const,
+    textAlign: 'justify' as const,
+    pageMargin: 64,
   }
   writeReaderPreferences(preferences)
   assert.ok(current()?.includes('"fontSize":24'))
   assert.deepEqual(readReaderPreferences(), preferences)
+})
+
+test('older reader preferences gain page layout defaults', () => {
+  storage(JSON.stringify({ mode: 'page', theme: 'sepia', font: 'sans', fontSize: 22, lineHeight: 1.8, width: 800 }))
+  assert.deepEqual(readReaderPreferences(), {
+    mode: 'page',
+    theme: 'sepia',
+    font: 'sans',
+    fontSize: 22,
+    lineHeight: 1.8,
+    width: 800,
+    pageMargin: defaultReaderPreferences.pageMargin,
+    textAlign: defaultReaderPreferences.textAlign,
+  })
 })

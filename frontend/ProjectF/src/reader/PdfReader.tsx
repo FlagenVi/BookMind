@@ -457,7 +457,7 @@ export function PdfReader({
 
   const step = mode === 'spread' ? 2 : 1
   return (
-    <div className="relative min-h-full min-w-full w-max bg-[#737373]" onMouseUp={onSelection}>
+    <div className="pdf-reader relative min-h-full min-w-full w-max bg-[#737373]" onMouseUp={onSelection}>
       <div
         className="sticky left-0 top-0 z-20 box-border flex flex-wrap items-center justify-center gap-2 border-b border-line bg-surface/95 px-3 py-2 text-foreground shadow-sm backdrop-blur"
         style={{ width: viewportWidth || '100%' }}
@@ -475,6 +475,7 @@ export function PdfReader({
               type="button"
               className={`rounded-lg p-2 transition ${mode === value ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-subtle'}`}
               aria-label={label}
+              aria-pressed={mode === value}
               title={label}
               onClick={() => onModeChange(value)}
             >

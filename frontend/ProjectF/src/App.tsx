@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter,
   Link,
@@ -21,7 +21,6 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Plus,
   UserRound,
   X,
   type LucideIcon,
@@ -31,7 +30,6 @@ import { booksApi, type BookItem } from './api/books'
 import { RequireAuth } from './components/RequireAuth'
 import { ThemeToggle } from './components/ThemeToggle'
 import { AuthPage } from './pages/AuthPage'
-import { BookContextPage } from './pages/BookContextPage'
 import { EditorPage } from './pages/EditorPage'
 import { DocumentPage, DocumentsPage } from './pages/HistoryPage'
 import { LibraryPage } from './pages/LibraryPage'
@@ -77,6 +75,8 @@ function AppShell() {
   const isAuth = location.pathname === '/auth'
   const hasSidebar = !isReader && !isAuth
   const [mobileOpen, setMobileOpen] = useState(false)
+  const mobileMenu = useRef<HTMLElement>(null)
+  const mobileMenuTrigger = useRef<HTMLButtonElement>(null)
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
   const me = useQuery({
     queryKey: ['me'],
@@ -93,14 +93,40 @@ function AppShell() {
   useEffect(() => {
     if (!mobileOpen) return
     const previousOverflow = document.body.style.overflow
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileOpen(false)
+    const trigger = mobileMenuTrigger.current
+    const frame = requestAnimationFrame(() =>
+      mobileMenu.current?.querySelector<HTMLElement>('[aria-label="Закрыть меню"]')?.focus(),
+    )
+    const handleMenuKeys = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMobileOpen(false)
+        return
+      }
+      if (event.key !== 'Tab' || !mobileMenu.current) return
+      const items = Array.from(mobileMenu.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])'))
+        .filter((item) => item.getClientRects().length > 0)
+      if (!items.length) return
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (!mobileMenu.current.contains(document.activeElement)) {
+        event.preventDefault()
+        first.focus()
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', closeOnEscape)
+    window.addEventListener('keydown', handleMenuKeys)
     return () => {
+      cancelAnimationFrame(frame)
       document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', closeOnEscape)
+      window.removeEventListener('keydown', handleMenuKeys)
+      if (trigger?.isConnected) trigger.focus()
     }
   }, [mobileOpen])
 
@@ -142,6 +168,7 @@ function AppShell() {
                 Суть текста
               </Link>
               <button
+                ref={mobileMenuTrigger}
                 type="button"
                 className="grid h-10 w-10 place-items-center rounded-xl border border-line text-secondary transition hover:border-accent-line hover:bg-accent-soft hover:text-accent"
                 aria-label="Открыть меню"
@@ -163,7 +190,11 @@ function AppShell() {
             )}
 
             <aside
+              ref={mobileMenu}
               id="app-sidebar"
+              role={mobileOpen ? 'dialog' : undefined}
+              aria-modal={mobileOpen ? 'true' : undefined}
+              aria-label={mobileOpen ? 'Главное меню' : undefined}
               className={`fixed inset-y-0 left-0 z-50 flex h-screen w-[min(290px,88vw)] flex-col overflow-hidden border-r border-line bg-surface p-5 shadow-2xl transition-[transform,padding] duration-300 md:sticky md:top-0 md:z-20 md:w-auto md:translate-x-0 md:overflow-visible md:shadow-none ${mobileOpen ? 'translate-x-0' : '-translate-x-full'} ${collapsed ? 'sidebar-collapsed md:p-3' : 'md:p-5'}`}
             >
               <div
@@ -211,27 +242,6 @@ function AppShell() {
               >
                 Читайте, сохраняйте, вспоминайте
               </p>
-
-              <NavLink
-                to="/"
-                end
-                title={collapsed ? 'Добавить материал' : undefined}
-                className={`ui-button ui-button-primary sidebar-item mt-6 flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-teal-700 px-3 py-2.5 text-sm font-semibold text-white ${collapsed ? 'md:px-0' : ''}`}
-                onClick={closeMobile}
-              >
-                <Plus size={18} aria-hidden="true" />
-                <span className={collapsed ? 'md:hidden' : ''}>
-                  Добавить материал
-                </span>
-                {collapsed && (
-                  <span
-                    className="sidebar-tooltip hidden md:block"
-                    aria-hidden="true"
-                  >
-                    Добавить материал
-                  </span>
-                )}
-              </NavLink>
 
               <nav
                 aria-label="Основная навигация"
@@ -481,7 +491,7 @@ function AppRoutes() {
         path="/library/:id/contexts"
         element={
           <RequireAuth>
-            <BookContextPage />
+            <LegacyBookContextRedirect />
           </RequireAuth>
         }
       />
@@ -530,4 +540,9 @@ function AppRoutes() {
 function LegacyDocumentRedirect() {
   const { id = '' } = useParams()
   return <Navigate to={`/documents/${encodeURIComponent(id)}`} replace />
+}
+
+function LegacyBookContextRedirect() {
+  const { id = '' } = useParams()
+  return <Navigate to={`/library/${encodeURIComponent(id)}/read?panel=book&tab=summary`} replace />
 }

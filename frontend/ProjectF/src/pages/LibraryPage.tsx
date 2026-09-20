@@ -1,7 +1,6 @@
 import { useCallback, useDeferredValue, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Archive,
   BookOpen,
   CalendarClock,
   Clock3,
@@ -43,6 +42,10 @@ import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
 import { SideDrawer } from '../components/ui/side-drawer'
 import { languageDisplayName } from '../library/bookDetailsFormat'
+import {
+  bookPageQueries,
+  setCachedBookFavorite,
+} from '../library/bookFavoriteCache'
 
 const statuses: Record<LibraryStatus, string> = {
   want_to_read: 'Хочу прочитать',
@@ -248,31 +251,19 @@ export function LibraryPage() {
       booksApi.saveFavorite(id, value),
     onMutate: async ({ id, value }) => {
       await Promise.all([
-        queryClient.cancelQueries({ queryKey: ['books'] }),
+        queryClient.cancelQueries(bookPageQueries),
         queryClient.cancelQueries({ queryKey: ['book', id, 'details'] }),
       ])
 
-      const previousBooks = queryClient.getQueriesData<BookPage>({
-        queryKey: ['books'],
-      })
+      const previousBooks =
+        queryClient.getQueriesData<BookPage>(bookPageQueries)
       const previousDetails = queryClient.getQueryData<BookDetails>([
         'book',
         id,
         'details',
       ])
 
-      queryClient.setQueriesData<BookPage>(
-        { queryKey: ['books'] },
-        (current) =>
-          current
-            ? {
-                ...current,
-                items: current.items.map((book) =>
-                  book.id === id ? { ...book, favorite: value } : book,
-                ),
-              }
-            : current,
-      )
+      setCachedBookFavorite(queryClient, id, value)
       queryClient.setQueryData<BookDetails>(
         ['book', id, 'details'],
         (current) => (current ? { ...current, favorite: value } : current),
@@ -292,7 +283,7 @@ export function LibraryPage() {
       }
     },
     onSettled: (_data, _error, { id }) => {
-      void queryClient.invalidateQueries({ queryKey: ['books'] })
+      void queryClient.invalidateQueries(bookPageQueries)
       void queryClient.invalidateQueries({
         queryKey: ['book', id, 'details'],
       })
@@ -328,25 +319,23 @@ export function LibraryPage() {
     mutationFn: (bookId: string) => booksApi.refreshDetails(bookId),
     onSuccess: (result) => {
       queryClient.setQueryData(['book', result.id, 'details'], result)
-      queryClient.setQueriesData<BookPage>(
-        { queryKey: ['books'] },
-        (current) =>
-          current
-            ? {
-                ...current,
-                items: current.items.map((book) =>
-                  book.id === result.id
-                    ? {
-                        ...book,
-                        title: result.title,
-                        author: result.author ?? undefined,
-                        genres: result.genres,
-                        hasCover: result.hasCover,
-                      }
-                    : book,
-                ),
-              }
-            : current,
+      queryClient.setQueriesData<BookPage>(bookPageQueries, (current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((book) =>
+                book.id === result.id
+                  ? {
+                      ...book,
+                      title: result.title,
+                      author: result.author ?? undefined,
+                      genres: result.genres,
+                      hasCover: result.hasCover,
+                    }
+                  : book,
+              ),
+            }
+          : current,
       )
       void queryClient.invalidateQueries({ queryKey: ['books'] })
     },
@@ -416,17 +405,15 @@ export function LibraryPage() {
     }) => booksApi.moveToCollection(ids, collectionId),
     onSuccess: (_, { ids, collectionId }) => {
       const moved = new Set(ids)
-      queryClient.setQueriesData<BookPage>(
-        { queryKey: ['books'] },
-        (current) =>
-          current
-            ? {
-                ...current,
-                items: current.items.map((book) =>
-                  moved.has(book.id) ? { ...book, collectionId } : book,
-                ),
-              }
-            : current,
+      queryClient.setQueriesData<BookPage>(bookPageQueries, (current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((book) =>
+                moved.has(book.id) ? { ...book, collectionId } : book,
+              ),
+            }
+          : current,
       )
       setMoveTarget(null)
       setSelected(new Set())
@@ -849,6 +836,15 @@ export function LibraryPage() {
         </section>
       )}
 
+      {updateFavorite.isError && (
+        <p
+          className="mt-4 rounded-xl border border-danger/30 bg-danger-soft px-4 py-3 text-sm text-danger"
+          role="alert"
+        >
+          Не удалось изменить избранное: {updateFavorite.error.message}
+        </p>
+      )}
+
       {query.isPending ? (
         <p className="mt-8" role="status">
           Загружаем библиотеку…
@@ -907,16 +903,19 @@ export function LibraryPage() {
             return (
               <article
                 key={book.id}
-                className={`document-card group relative flex overflow-hidden rounded-2xl border bg-surface ${selected.has(book.id) ? 'border-accent-line ring-2 ring-accent-soft' : 'border-line'} ${view === 'grid' ? 'min-h-80' : 'min-h-40'}`}
+                className={`document-card group flex overflow-hidden rounded-2xl border bg-surface ${selected.has(book.id) ? 'border-accent-line ring-2 ring-accent-soft' : 'border-line'} ${view === 'grid' ? 'flex-col' : 'flex-col sm:flex-row'}`}
               >
-                <div
-                  className={`flex shrink-0 items-center justify-center overflow-hidden bg-accent-soft ${view === 'grid' ? 'w-28 sm:w-32' : 'w-24 sm:w-28'}`}
+                <Link
+                  to={`/library/${book.id}/read`}
+                  aria-label={`Открыть книгу «${book.title}»`}
+                  className={`flex shrink-0 items-center justify-center overflow-hidden bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-line ${view === 'grid' ? 'h-52 w-full border-b border-line' : 'h-44 w-full sm:h-auto sm:w-32'}`}
                 >
                   {book.hasCover ? (
                     <img
                       src={`/api/books/${encodeURIComponent(book.id)}/cover?v=${encodeURIComponent(book.updatedAt)}`}
                       alt={`Обложка книги «${book.title}»`}
-                      className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+                      loading="lazy"
+                      className="h-full w-full object-contain p-2 transition duration-500 group-hover:scale-[1.03]"
                     />
                   ) : (
                     <span className="rounded-xl bg-surface/80 p-4 text-accent shadow-sm">
@@ -927,39 +926,40 @@ export function LibraryPage() {
                       )}
                     </span>
                   )}
-                </div>
-                <div
-                  className={`flex min-w-0 flex-1 flex-col ${view === 'grid' ? 'p-5' : 'p-4 sm:p-5'}`}
-                >
-                  <div className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
-                      className="absolute left-2 top-2 z-10 h-5 w-5 rounded border-line bg-surface accent-teal-700 shadow-sm"
-                      checked={selected.has(book.id)}
-                      onChange={() => toggleSelected(book.id)}
-                      aria-label={`Выбрать книгу «${book.title}»`}
-                    />
-                    <NativeSelect
-                      aria-label={`Статус книги «${book.title}»`}
-                      containerClassName="min-w-[8.5rem] max-w-44 flex-1"
-                      className="w-full truncate rounded-full border-0 bg-accent-soft py-1 pl-3 pr-8 text-xs font-semibold text-accent outline-none ring-accent-line focus:ring-2"
-                      value={book.libraryStatus}
-                      disabled={updateLibrary.isPending}
-                      onChange={(event) =>
-                        updateLibrary.mutate({
-                          book,
-                          nextStatus: event.target.value as LibraryStatus,
-                        })
-                      }
-                    >
-                      {Object.entries(statuses).map(([value, label]) => (
-                        <option key={value} value={value}>
-                          {label}
-                        </option>
-                      ))}
-                    </NativeSelect>
+                </Link>
+                <div className="flex min-w-0 flex-1 flex-col p-4 sm:p-5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="h-5 w-5 shrink-0 rounded border-line bg-surface accent-teal-700"
+                        checked={selected.has(book.id)}
+                        onChange={() => toggleSelected(book.id)}
+                        aria-label={`Выбрать книгу «${book.title}»`}
+                      />
+                      <NativeSelect
+                        aria-label={`Статус книги «${book.title}»`}
+                        containerClassName="min-w-0 max-w-44 flex-1"
+                        className="min-h-8 w-full truncate rounded-full border-0 bg-accent-soft py-1 pl-3 pr-8 text-xs font-semibold text-accent outline-none ring-accent-line focus:ring-2"
+                        value={book.libraryStatus}
+                        disabled={updateLibrary.isPending}
+                        onChange={(event) =>
+                          updateLibrary.mutate({
+                            book,
+                            nextStatus: event.target.value as LibraryStatus,
+                          })
+                        }
+                      >
+                        {Object.entries(statuses).map(([value, label]) => (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        ))}
+                      </NativeSelect>
+                    </div>
                     <button
                       type="button"
+                      aria-pressed={book.favorite}
                       aria-label={
                         book.favorite
                           ? `Убрать книгу «${book.title}» из избранного`
@@ -968,7 +968,7 @@ export function LibraryPage() {
                       title={
                         book.favorite ? 'Убрать из избранного' : 'В избранное'
                       }
-                      className={`rounded-lg p-1.5 transition hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line ${book.favorite ? 'text-rose-500' : 'text-muted hover:text-rose-500'}`}
+                      className={`flex size-9 shrink-0 items-center justify-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line ${book.favorite ? 'bg-rose-500/10 text-rose-500 hover:bg-rose-500/20' : 'text-muted hover:bg-accent-soft hover:text-rose-500'}`}
                       disabled={updateFavorite.isPending}
                       onClick={() =>
                         updateFavorite.mutate({
@@ -984,51 +984,18 @@ export function LibraryPage() {
                     </button>
                   </div>
                   <h2
-                    className={`${view === 'grid' ? 'mt-4 line-clamp-3' : 'mt-3 line-clamp-1'} text-lg font-semibold`}
+                    className={`${view === 'grid' ? 'mt-3 line-clamp-2' : 'mt-2 line-clamp-2'} text-lg font-semibold leading-snug`}
                   >
-                    {book.title}
+                    <Link
+                      to={`/library/${book.id}/read`}
+                      className="hover:text-accent focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
+                    >
+                      {book.title}
+                    </Link>
                   </h2>
-                  <p className="mt-2 line-clamp-2 text-sm text-muted">
+                  <p className="mt-1 line-clamp-1 text-sm text-muted">
                     {book.author || 'Автор не указан'}
                   </p>
-                  <div className="mt-1 flex justify-end gap-1">
-                    <button
-                      type="button"
-                      aria-label={`Переместить книгу «${book.title}» в коллекцию`}
-                      title={
-                        book.collectionId
-                          ? `Коллекция: ${collectionItems.find((item) => item.id === book.collectionId)?.name ?? 'Без названия'}`
-                          : 'Переместить в коллекцию'
-                      }
-                      className={`rounded-lg p-1.5 transition hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line ${book.collectionId ? 'text-accent' : 'text-muted hover:text-accent'}`}
-                      onClick={() =>
-                        openMoveDialog([book.id], book.title, book.collectionId)
-                      }
-                    >
-                      <FolderInput size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Открыть детали книги «${book.title}»`}
-                      title="Детали книги"
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
-                      onClick={() => openDetails(book)}
-                    >
-                      <Info size={16} />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Удалить книгу «${book.title}»`}
-                      title="Удалить книгу"
-                      className="rounded-lg p-1.5 text-muted transition hover:bg-danger-soft hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
-                      onClick={() => {
-                        removeBook.reset()
-                        setDeleting(book)
-                      }}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
                   {!!book.genres.length && view === 'grid' && (
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {book.genres.slice(0, 3).map((genre) => (
@@ -1046,9 +1013,7 @@ export function LibraryPage() {
                       )}
                     </div>
                   )}
-                  <dl
-                    className={`${view === 'grid' ? 'mt-4 space-y-1.5' : 'mt-2 flex flex-wrap gap-x-5 gap-y-1'} text-xs text-muted`}
-                  >
+                  <dl className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted">
                     <div className="flex items-center gap-2">
                       <CalendarClock size={14} />
                       <dt className="sr-only">Последнее чтение</dt>
@@ -1071,35 +1036,100 @@ export function LibraryPage() {
                       </div>
                     )}
                   </dl>
-                  <div className="mt-auto pt-5">
-                    <div className="flex justify-between gap-3 text-xs text-muted">
+                  <div className="mt-auto pt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted">
                       <span>
                         {ready ? `${progress}% прочитано` : 'Подготовка книги…'}
                       </span>
-                      <span>{book.format.toUpperCase()}</span>
-                      {book.fileSizeBytes != null && (
-                        <span>{fileSize(book.fileSizeBytes)}</span>
-                      )}
+                      <span className="flex items-center gap-2">
+                        <span className="rounded-md bg-subtle px-1.5 py-0.5 font-medium">
+                          {book.format.toUpperCase()}
+                        </span>
+                        {book.fileSizeBytes != null && (
+                          <span>{fileSize(book.fileSizeBytes)}</span>
+                        )}
+                      </span>
                     </div>
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-subtle">
+                    <div
+                      role={ready ? 'progressbar' : undefined}
+                      aria-label={
+                        ready
+                          ? `Прогресс чтения книги «${book.title}»`
+                          : undefined
+                      }
+                      aria-valuenow={ready ? progress : undefined}
+                      aria-valuemin={ready ? 0 : undefined}
+                      aria-valuemax={ready ? 100 : undefined}
+                      className="mt-2 h-1.5 overflow-hidden rounded-full bg-subtle"
+                    >
                       <div
                         className="h-full rounded-full bg-teal-600 transition-[width] duration-500"
                         style={{ width: `${ready ? progress : 8}%` }}
                       />
                     </div>
-                    <Button
-                      asChild
-                      className={view === 'grid' ? 'mt-4 w-full' : 'mt-3 w-fit'}
-                      variant={ready ? 'default' : 'outline'}
-                    >
-                      <Link to={`/library/${book.id}/read`}>
-                        {ready
-                          ? progress
-                            ? 'Продолжить чтение'
-                            : 'Начать читать'
-                          : 'Открыть подготовку'}
-                      </Link>
-                    </Button>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                      <Button
+                        asChild
+                        className={
+                          view === 'grid' ? 'min-w-0 flex-1 px-3' : 'px-4'
+                        }
+                        variant={ready ? 'default' : 'outline'}
+                      >
+                        <Link to={`/library/${book.id}/read`}>
+                          {ready
+                            ? progress
+                              ? view === 'grid'
+                                ? 'Продолжить'
+                                : 'Продолжить чтение'
+                              : view === 'grid'
+                                ? 'Читать'
+                                : 'Начать читать'
+                            : 'Открыть подготовку'}
+                        </Link>
+                      </Button>
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          aria-label={`Переместить книгу «${book.title}» в коллекцию`}
+                          title={
+                            book.collectionId
+                              ? `Коллекция: ${collectionItems.find((item) => item.id === book.collectionId)?.name ?? 'Без названия'}`
+                              : 'Переместить в коллекцию'
+                          }
+                          className={`flex size-9 items-center justify-center rounded-lg transition hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line ${book.collectionId ? 'text-accent' : 'text-muted hover:text-accent'}`}
+                          onClick={() =>
+                            openMoveDialog(
+                              [book.id],
+                              book.title,
+                              book.collectionId,
+                            )
+                          }
+                        >
+                          <FolderInput size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Открыть детали книги «${book.title}»`}
+                          title="Детали книги"
+                          className="flex size-9 items-center justify-center rounded-lg text-muted transition hover:bg-subtle hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-line"
+                          onClick={() => openDetails(book)}
+                        >
+                          <Info size={17} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Удалить книгу «${book.title}»`}
+                          title="Удалить книгу"
+                          className="flex size-9 items-center justify-center rounded-lg text-muted transition hover:bg-danger-soft hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger"
+                          onClick={() => {
+                            removeBook.reset()
+                            setDeleting(book)
+                          }}
+                        >
+                          <Trash2 size={17} />
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </article>
@@ -1594,12 +1624,6 @@ export function LibraryPage() {
                         <Download size={16} />
                         Скачать оригинал
                       </a>
-                    </Button>
-                    <Button asChild variant="outline">
-                      <Link to={`/library/${details.data.id}/contexts`}>
-                        <Archive size={16} />
-                        Контексты
-                      </Link>
                     </Button>
                     <Button asChild variant="outline">
                       <label className="cursor-pointer">

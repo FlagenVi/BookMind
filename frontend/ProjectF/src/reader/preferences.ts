@@ -1,6 +1,7 @@
 export type ReaderMode = 'scroll' | 'page' | 'spread'
 export type ReaderTheme = 'paper' | 'sepia' | 'night'
-export type ReaderFont = 'serif' | 'sans'
+export type ReaderFont = 'serif' | 'classic' | 'sans' | 'readable'
+export type ReaderTextAlign = 'left' | 'justify'
 
 export type ReaderPreferences = {
   mode: ReaderMode
@@ -9,6 +10,8 @@ export type ReaderPreferences = {
   fontSize: number
   lineHeight: number
   width: number
+  pageMargin: number
+  textAlign: ReaderTextAlign
 }
 
 export const defaultReaderPreferences: ReaderPreferences = {
@@ -18,6 +21,8 @@ export const defaultReaderPreferences: ReaderPreferences = {
   fontSize: 19,
   lineHeight: 1.7,
   width: 760,
+  pageMargin: 48,
+  textAlign: 'left',
 }
 
 function bounded(value: unknown, fallback: number, min: number, max: number) {
@@ -36,7 +41,7 @@ export function readReaderPreferences(): ReaderPreferences {
       theme: ['paper', 'sepia', 'night'].includes(saved.theme)
         ? saved.theme
         : defaultReaderPreferences.theme,
-      font: ['serif', 'sans'].includes(saved.font)
+      font: ['serif', 'classic', 'sans', 'readable'].includes(saved.font)
         ? saved.font
         : defaultReaderPreferences.font,
       fontSize: bounded(
@@ -52,6 +57,10 @@ export function readReaderPreferences(): ReaderPreferences {
         2.2,
       ),
       width: bounded(saved.width, defaultReaderPreferences.width, 520, 1100),
+      pageMargin: bounded(saved.pageMargin, defaultReaderPreferences.pageMargin, 16, 96),
+      textAlign: ['left', 'justify'].includes(saved.textAlign)
+        ? saved.textAlign
+        : defaultReaderPreferences.textAlign,
     }
   } catch {
     return defaultReaderPreferences

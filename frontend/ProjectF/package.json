@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test tests/reader-geometry.test.ts tests/text-anchors.test.ts tests/section-cache.test.ts tests/reader-api.test.ts tests/book-details-format.test.ts tests/reader-navigation.test.ts tests/reader-segments.test.ts tests/reader-preferences.test.ts",
+    "test": "node --experimental-strip-types --test tests/reader-geometry.test.ts tests/text-anchors.test.ts tests/section-cache.test.ts tests/reader-api.test.ts tests/book-details-format.test.ts tests/book-favorite-cache.test.ts tests/reader-navigation.test.ts tests/reader-segments.test.ts tests/reader-preferences.test.ts",
     "benchmark:reader": "node --experimental-strip-types --expose-gc benchmarks/reader-window.bench.ts",
     "preview": "vite preview",
     "format": "prettier --write src vite.config.ts index.html",

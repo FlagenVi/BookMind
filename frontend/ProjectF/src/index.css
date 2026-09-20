@@ -12,7 +12,11 @@
 
 .project-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--app-accent) 58%, var(--app-line-strong))
+  scrollbar-color: color-mix(
+      in srgb,
+      var(--app-accent) 58%,
+      var(--app-line-strong)
+    )
     var(--app-subtle);
 }
 
@@ -66,22 +70,22 @@
 }
 :root {
   color-scheme: light;
-  --app-page: #f8fafc;
-  --app-surface: #ffffff;
-  --app-subtle: #f1f5f9;
-  --app-foreground: #0f172a;
-  --app-secondary: #475569;
-  --app-muted: #64748b;
-  --app-line: #e2e8f0;
-  --app-line-strong: #cbd5e1;
-  --app-accent: #0f766e;
-  --app-accent-soft: #f0fdfa;
-  --app-accent-line: #99f6e4;
-  --app-danger: #b91c1c;
-  --app-danger-soft: #fef2f2;
-  --app-success: #065f46;
-  --app-success-soft: #ecfdf5;
-  --app-warning: #92400e;
+  --app-page: #f2f0e9;
+  --app-surface: #faf8f3;
+  --app-subtle: #ebe7de;
+  --app-foreground: #27343a;
+  --app-secondary: #47575e;
+  --app-muted: #5d6d73;
+  --app-line: #dadbd2;
+  --app-line-strong: #bfc8c0;
+  --app-accent: #0b766d;
+  --app-accent-soft: #e3f1eb;
+  --app-accent-line: #a9d3c8;
+  --app-danger: #b9384b;
+  --app-danger-soft: #fae9e9;
+  --app-success: #176b53;
+  --app-success-soft: #e8f2e9;
+  --app-warning: #8b5e24;
 }
 :root[data-theme='dark'] {
   color-scheme: dark;
@@ -101,6 +105,87 @@
   --app-success: #86efac;
   --app-success-soft: #17332b;
   --app-warning: #fcd38a;
+}
+
+.reader-shell[data-reader-theme='paper'] {
+  color-scheme: light;
+  --app-page: #fbfaf7;
+  --app-surface: #f4f1e9;
+  --app-subtle: #ebe7de;
+  --app-foreground: #292722;
+  --app-secondary: #4d4840;
+  --app-muted: #665f55;
+  --app-line: #d8d2c8;
+  --app-line-strong: #b6ad9f;
+  --app-accent: #0b766d;
+  --app-accent-soft: #e5f1eb;
+  --app-accent-line: #a9d3c8;
+  --app-danger: #b9384b;
+  --app-danger-soft: #fae9e9;
+  --app-success: #176b53;
+  --app-success-soft: #e8f2e9;
+  --app-warning: #8b5e24;
+}
+
+.reader-shell[data-reader-theme='sepia'] {
+  color-scheme: light;
+  --app-page: #f3e6ca;
+  --app-surface: #ecddbd;
+  --app-subtle: #e2cfaa;
+  --app-foreground: #483b2b;
+  --app-secondary: #594a34;
+  --app-muted: #705b3f;
+  --app-line: #cbb891;
+  --app-line-strong: #a48d64;
+  --app-accent: #0b6a62;
+  --app-accent-soft: #d8e7d7;
+  --app-accent-line: #8db7a6;
+  --app-danger: #a53648;
+  --app-danger-soft: #f4d7cf;
+  --app-success: #25674f;
+  --app-success-soft: #dce8cf;
+  --app-warning: #80531f;
+}
+
+.reader-shell[data-reader-theme='night'] {
+  color-scheme: dark;
+  --app-page: #14191f;
+  --app-surface: #202931;
+  --app-subtle: #2a353e;
+  --app-foreground: #d9d6cf;
+  --app-secondary: #c4c7c7;
+  --app-muted: #aab4b6;
+  --app-line: #3a4650;
+  --app-line-strong: #596a72;
+  --app-accent: #71dfca;
+  --app-accent-soft: #173537;
+  --app-accent-line: #326c65;
+  --app-danger: #fca5a5;
+  --app-danger-soft: #382127;
+  --app-success: #86efac;
+  --app-success-soft: #17332b;
+  --app-warning: #fcd38a;
+}
+
+.reader-font-serif {
+  font-family: Georgia, 'Times New Roman', serif;
+}
+
+.reader-font-classic {
+  font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+}
+
+.reader-font-sans {
+  font-family: 'Segoe UI', Arial, sans-serif;
+}
+
+.reader-font-readable {
+  font-family: Verdana, Geneva, sans-serif;
+}
+
+.reader-text-justify .reader-page {
+  text-align: justify;
+  text-align-last: left;
 }
 
 @layer components {
@@ -178,9 +263,8 @@
 
   .ui-button:focus-visible,
   .nav-link:focus-visible {
-    outline: 2px solid var(--color-teal-600);
+    outline: 3px solid var(--app-accent);
     outline-offset: 3px;
-    box-shadow: 0 0 0 5px rgb(20 184 166 / 10%);
   }
 
   .nav-link {
@@ -260,6 +344,11 @@
     outline: none;
     border-color: var(--color-teal-500);
     box-shadow: 0 0 0 4px rgb(20 184 166 / 12%);
+  }
+
+  :is(button, a, input, textarea, select, [role='tab'], [tabindex]):focus-visible {
+    outline: 3px solid var(--app-accent);
+    outline-offset: 3px;
   }
 
   input[aria-invalid='true'],
@@ -362,6 +451,29 @@
     .brand-link span,
     .document-card {
       transform: none !important;
+    }
+  }
+
+  @media (pointer: coarse) {
+    .ui-button,
+    .nav-link,
+    .sidebar-item,
+    .reader-shell header button,
+    .reader-shell aside button,
+    .reader-shell footer button,
+    .reader-shell [role='dialog'] button,
+    .pdf-reader button,
+    .docx-reader button {
+      min-width: 44px;
+      min-height: 44px;
+    }
+
+    .reader-shell [role='tab'],
+    .reader-shell input[type='range'],
+    .reader-shell select,
+    .pdf-reader select,
+    .docx-reader select {
+      min-height: 44px;
     }
   }
 }

@@ -16,6 +16,7 @@ export function ModalDialog({
   onClose,
   closeDisabled = false,
   role = 'dialog',
+  placement = 'center',
   className,
 }: {
   children: ReactNode
@@ -24,6 +25,7 @@ export function ModalDialog({
   onClose: () => void
   closeDisabled?: boolean
   role?: 'dialog' | 'alertdialog'
+  placement?: 'center' | 'right'
   className: string
 }) {
   const dialogRef = useRef<HTMLElement>(null)
@@ -82,7 +84,7 @@ export function ModalDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-3 backdrop-blur-sm sm:p-5"
+      className={`fixed inset-0 z-50 grid bg-black/45 backdrop-blur-sm ${placement === 'right' ? 'justify-items-end p-0' : 'place-items-center p-3 sm:p-5'}`}
       role="presentation"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target && !closeDisabled) onClose()
