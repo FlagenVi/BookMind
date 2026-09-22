@@ -81,7 +81,7 @@ export function ContinuousReader({
   highlights: Highlight[]
   searchMatches: BookSearchItem[]
   activeSearchIndex: number | null
-  onNavigateLink: (link: SectionLink) => void
+  onNavigateLink: (link: SectionLink, anchor: DOMRect) => void
   fontClass: string
   fontSize: number
   lineHeight: number

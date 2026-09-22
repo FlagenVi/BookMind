@@ -33,7 +33,7 @@ function DecoratedText({
   searchMatches: BookSearchItem[]
   activeSearchIndex: number | null
   links: SectionLink[]
-  onNavigateLink: (link: SectionLink) => void
+  onNavigateLink: (link: SectionLink, anchor: DOMRect) => void
 }) {
   return segmentReaderText({
     text,
@@ -70,7 +70,12 @@ function DecoratedText({
             ? 'Перейти к примечанию'
             : 'Перейти по внутренней ссылке'
         }
-        onClick={() => onNavigateLink(segment.link!)}
+        onClick={(event) =>
+          onNavigateLink(
+            segment.link!,
+            event.currentTarget.getBoundingClientRect(),
+          )
+        }
       >
         {content}
       </button>
@@ -104,7 +109,7 @@ export function ReaderSlice({
   highlights: Highlight[]
   searchMatches: BookSearchItem[]
   activeSearchIndex: number | null
-  onNavigateLink: (link: SectionLink) => void
+  onNavigateLink: (link: SectionLink, anchor: DOMRect) => void
   fontClass: string
   fontSize: number
   lineHeight: number

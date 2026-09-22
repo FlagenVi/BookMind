@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { BookOpenText, BookPlus, Info, Send, Trash2 } from 'lucide-react'
-import { bookChatApi, type BookChatMode, type BookChatThread } from '../api/bookChat'
+import { bookChatApi, type BookChatMode, type BookChatSelection, type BookChatThread } from '../api/bookChat'
 import { Button } from './ui/button'
 import { NativeSelect } from './ui/native-select'
 
@@ -22,16 +22,21 @@ function FormattedAnswer({ text }: { text: string }) {
 export function BookChatPanel({
   bookId,
   onOpenSource,
+  initialSelection,
+  onSelectionConsumed,
 }: {
   bookId: string
   onOpenSource: (offset: number, label: string) => void
+  initialSelection?: BookChatSelection | null
+  onSelectionConsumed?: () => void
 }) {
   const client = useQueryClient()
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() => {
     try { return localStorage.getItem(`book-chat-thread:${bookId}`) } catch { return null }
   })
   const [mode, setMode] = useState<BookChatMode>('grounded')
-  const [question, setQuestion] = useState('')
+  const [question, setQuestion] = useState(initialSelection ? 'Объясни смысл и значение этого фрагмента.' : '')
+  const [selection, setSelection] = useState<BookChatSelection | null>(initialSelection ?? null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const messagesRef = useRef<HTMLDivElement>(null)
   const nearBottomRef = useRef(true)
@@ -74,11 +79,12 @@ export function BookChatPanel({
     },
   })
   const send = useMutation({
-    mutationFn: (input: { id: string; question: string; mode: BookChatMode; threadId: string }) =>
+    mutationFn: (input: { id: string; question: string; mode: BookChatMode; threadId: string; selection?: BookChatSelection }) =>
       bookChatApi.send(bookId, input.threadId, {
         id: input.id,
         question: input.question,
         mode: input.mode,
+        selection: input.selection,
       }),
     onMutate: () => { setQuestion(''); nearBottomRef.current = true },
     onSuccess: (turn) => {
@@ -87,6 +93,8 @@ export function BookChatPanel({
         : [...(current ?? []), turn])
       void client.invalidateQueries({ queryKey: turnsKey })
       void client.invalidateQueries({ queryKey: threadKey })
+      setSelection(null)
+      onSelectionConsumed?.()
     },
     onError: (_error, input) => {
       setQuestion((current) => current || input.question)
@@ -214,16 +222,37 @@ export function BookChatPanel({
           <form onSubmit={(event) => {
             event.preventDefault()
             if (threadId && question.trim() && !send.isPending && !hasPending)
-              send.mutate({ id: crypto.randomUUID(), question: question.trim(), mode, threadId })
+              send.mutate({
+                id: crypto.randomUUID(),
+                question: question.trim(),
+                mode: selection ? 'grounded' : mode,
+                threadId,
+                selection: selection ?? undefined,
+              })
           }} className="shrink-0 pt-3">
-            <div className="flex items-center gap-2">
-              <label className="shrink-0 text-xs font-medium text-muted" htmlFor="book-chat-mode">Источник</label>
-              <NativeSelect id="book-chat-mode" containerClassName="min-w-0 flex-1" className="min-h-9 w-full rounded-lg border border-line bg-surface px-3 text-xs" value={mode} onChange={(event) => setMode(event.target.value as BookChatMode)} disabled={send.isPending || hasPending}>
-                <option value="grounded">По моей книге</option>
-                <option value="model_knowledge">О книге без файла</option>
-              </NativeSelect>
-            </div>
-            {mode === 'model_knowledge' && <p className="mt-1 text-xs text-muted">Без файла книги: модель может ошибаться в деталях.</p>}
+            {selection && (
+              <div className="mb-2 flex items-start justify-between gap-3 rounded-xl border border-accent-line bg-accent-soft p-3 text-xs">
+                <p className="line-clamp-3">«{selection.exactText}»</p>
+                <button type="button" className="shrink-0 text-muted" aria-label="Убрать выбранный фрагмент" onClick={() => { setSelection(null); onSelectionConsumed?.() }}>
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            )}
+            {selection ? (
+              <div className="flex min-h-9 items-center gap-2 rounded-lg border border-accent-line bg-accent-soft px-3 text-xs">
+                <span className="font-medium text-muted">Источник</span>
+                <span className="font-semibold text-accent">Выделенный фрагмент этой книги</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <label className="shrink-0 text-xs font-medium text-muted" htmlFor="book-chat-mode">Источник</label>
+                <NativeSelect id="book-chat-mode" containerClassName="min-w-0 flex-1" className="min-h-9 w-full rounded-lg border border-line bg-surface px-3 text-xs" value={mode} onChange={(event) => setMode(event.target.value as BookChatMode)} disabled={send.isPending || hasPending}>
+                  <option value="grounded">По моей книге</option>
+                  <option value="model_knowledge">О книге без файла</option>
+                </NativeSelect>
+              </div>
+            )}
+            {!selection && mode === 'model_knowledge' && <p className="mt-1 text-xs text-muted">Без файла книги: модель может ошибаться в деталях.</p>}
             <div className="mt-2 flex items-end gap-2 rounded-xl border border-line bg-surface p-2 focus-within:border-accent">
               <label className="sr-only" htmlFor="book-chat-question">Сообщение</label>
               <textarea
@@ -250,7 +279,7 @@ export function BookChatPanel({
               <p>Enter — отправить · Shift+Enter — новая строка · Запрос может быть платным</p>
               <details className="mt-1">
                 <summary className="inline-flex cursor-pointer items-center gap-1"><Info size={12} /> Как работает</summary>
-                <p className="mt-1">{mode === 'grounded' ? 'Для ответа используются до 6 отрывков до сохранённой позиции. Остальные главы могут не учитываться.' : 'Файл не отправляется. Ответ по знаниям модели не считается проверенным по вашей книге.'} Книжник настроен на вопросы по выбранной книге. Автоматического повтора нет.</p>
+                <p className="mt-1">{selection ? 'В запрос попадут выбранная цитата, небольшой контекст вокруг неё и название текущей книги.' : mode === 'grounded' ? 'Для ответа используются до 6 отрывков до сохранённой позиции. Остальные главы могут не учитываться.' : 'Файл не отправляется. Ответ по знаниям модели не считается проверенным по вашей книге.'} Книжник настроен на вопросы по выбранной книге. Автоматического повтора нет.</p>
               </details>
             </div>
             {send.isError && <p role="alert" className="mt-2 text-sm text-danger">{send.error.message} Проверьте историю беседы: запрос мог завершиться на сервере.</p>}

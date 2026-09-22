@@ -1,4 +1,4 @@
-# Суть текста — frontend
+# BookMind — frontend
 
 React + TypeScript + Vite + Tailwind CSS.
 

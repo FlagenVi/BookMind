@@ -645,15 +645,20 @@ export function ProfilePage() {
                     {saveGoal.error.message}
                   </p>
                 )}
-                {saveGoal.isSuccess && (
-                  <p role="status" className="text-sm text-success">
-                    Цели сохранены.
-                  </p>
-                )}
-                <Button className="sm:ml-auto" disabled={saveGoal.isPending}>
-                  <Save size={16} />
-                  {saveGoal.isPending ? 'Сохраняем…' : 'Сохранить цели'}
-                </Button>
+                <div className="flex flex-col gap-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
+                  {saveGoal.isSuccess && (
+                    <p role="status" className="text-sm text-success">
+                      Цели сохранены.
+                    </p>
+                  )}
+                  <Button
+                    className="w-full sm:ml-auto sm:w-auto"
+                    disabled={saveGoal.isPending}
+                  >
+                    <Save size={16} />
+                    {saveGoal.isPending ? 'Сохраняем…' : 'Сохранить цели'}
+                  </Button>
+                </div>
               </form>
             </section>
 

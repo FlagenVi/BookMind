@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type ReactNode,
 } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -18,15 +17,19 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns2,
+  Copy,
   Download,
   Edit3,
   List,
+  Highlighter,
+  Keyboard,
   Maximize2,
   Menu,
   Minimize2,
   Minus,
   Plus,
   Search,
+  MessageCircleQuestion,
   ScrollText,
   Settings2,
   Trash2,
@@ -44,6 +47,7 @@ import {
   type SectionLink,
 } from '../api/books'
 import { ApiError } from '../api/client'
+import type { BookChatSelection } from '../api/bookChat'
 import { BookChatPanel } from '../components/BookChatPanel'
 import { SummaryPanel } from '../components/SummaryPanel'
 import { Button } from '../components/ui/button'
@@ -53,6 +57,7 @@ import {
   ContinuousReader,
   type ScrollNavigation,
 } from '../reader/ContinuousReader'
+import { segmentReaderText } from '../reader/textSegments'
 import {
   anchorFromOffset,
   offsetFromAnchor,
@@ -79,6 +84,19 @@ type SelectionDraft = {
   startOffset: number
   endOffset: number
   exactText: string
+  anchorX: number
+  anchorY: number
+  placeBelow: boolean
+}
+type LinkPreview = {
+  link: SectionLink
+  title: string
+  excerpt: string
+  loading: boolean
+  anchorX: number
+  anchorY: number
+  placeBelow: boolean
+  error?: string
 }
 type BookmarkDraft = {
   id?: string
@@ -220,38 +238,33 @@ function selectionOffset(container: Node, offset: number) {
 function HighlightedText({
   text,
   baseOffset,
+  sectionStartOffset,
   highlights,
+  searchMatches,
+  activeSearchIndex,
+  links,
+  onNavigateLink,
 }: {
   text: string
   baseOffset: number
+  sectionStartOffset: number
   highlights: Highlight[]
+  searchMatches: BookSearchItem[]
+  activeSearchIndex: number | null
+  links: SectionLink[]
+  onNavigateLink: (link: SectionLink, anchor: DOMRect) => void
 }) {
-  const end = baseOffset + text.length
-  const relevant = highlights
-    .filter((item) => item.startOffset < end && item.endOffset > baseOffset)
-    .sort((a, b) => a.startOffset - b.startOffset)
-  const nodes: ReactNode[] = []
-  let cursor = baseOffset
-  for (const item of relevant) {
-    const start = Math.max(cursor, item.startOffset, baseOffset)
-    const itemEnd = Math.min(end, item.endOffset)
-    if (start > cursor)
-      nodes.push(text.slice(cursor - baseOffset, start - baseOffset))
-    if (itemEnd > start) {
-      nodes.push(
-        <mark
-          key={`${item.id}-${start}`}
-          className={`rounded-sm ${markColors[item.color]}`}
-          title={item.note || 'Выделение'}
-        >
-          {text.slice(start - baseOffset, itemEnd - baseOffset)}
-        </mark>,
-      )
-      cursor = itemEnd
-    }
-  }
-  if (cursor < end) nodes.push(text.slice(cursor - baseOffset))
-  return nodes
+  return segmentReaderText({ text, baseOffset, sectionStartOffset, highlights, searchMatches, activeSearchIndex, links }).map((segment) => {
+    const className = [
+      segment.highlight ? markColors[segment.highlight.color] : '',
+      segment.search === 'active' ? 'bg-orange-300/90 text-[#292722] ring-1 ring-orange-500/70' : segment.search === 'visible' ? 'bg-amber-200/80 text-[#292722]' : '',
+      segment.highlight || segment.search ? 'rounded-sm' : '',
+    ].filter(Boolean).join(' ')
+    const content = <span className={className || undefined} title={segment.highlight?.note}>{segment.text}</span>
+    return segment.link ? (
+      <button key={`${segment.startOffset}-${segment.endOffset}`} type="button" className="inline rounded-sm text-inherit underline decoration-current/50 decoration-dotted underline-offset-4 hover:text-accent focus-visible:ring-2 focus-visible:ring-accent" title={segment.link.kind === 'note' ? 'Показать примечание' : 'Предпросмотр внутренней ссылки'} onClick={(event) => onNavigateLink(segment.link!, event.currentTarget.getBoundingClientRect())}>{content}</button>
+    ) : <span key={`${segment.startOffset}-${segment.endOffset}`}>{content}</span>
+  })
 }
 
 function SearchExcerpt({ item }: { item: BookSearchItem }) {
@@ -304,6 +317,12 @@ export function ReaderPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsDialog = useRef<HTMLElement>(null)
   const [draft, setDraft] = useState<SelectionDraft | null>(null)
+  const [selectionEditorOpen, setSelectionEditorOpen] = useState(false)
+  const [selectionCopied, setSelectionCopied] = useState(false)
+  const [chatSelection, setChatSelection] = useState<BookChatSelection | null>(null)
+  const [linkPreview, setLinkPreview] = useState<LinkPreview | null>(null)
+  const linkPreviewPopup = useRef<HTMLElement>(null)
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false)
   const [note, setNote] = useState('')
   const [color, setColor] = useState<Highlight['color']>('yellow')
   const [bookmarkDraft, setBookmarkDraft] = useState<BookmarkDraft | null>(null)
@@ -488,6 +507,14 @@ export function ReaderPage() {
           ),
         )
   const currentMeta = sections[sectionIndex]
+  const mainSections = sections.filter((item) => item.role === 'main')
+  const currentMainIndex = Math.max(
+    0,
+    mainSections.findIndex((item) => item.number === currentMeta?.number),
+  )
+  const currentChapterMinutes = currentMeta
+    ? Math.max(1, Math.ceil((currentMeta.endOffset - currentMeta.startOffset) / 1000))
+    : 1
   const tocEntries = manifest.data?.toc ?? []
   const tocIndex = Math.max(
     0,
@@ -884,6 +911,7 @@ export function ReaderPage() {
       }),
     onSuccess: () => {
       setDraft(null)
+      setSelectionEditorOpen(false)
       setNote('')
       window.getSelection()?.removeAllRanges()
       void queryClient.invalidateQueries({
@@ -1065,7 +1093,7 @@ export function ReaderPage() {
     }
   }
 
-  function navigateSectionLink(link: SectionLink) {
+  function navigateSectionLink(link: SectionLink, anchor: DOMRect) {
     if (!manifest.data) return
     const sectionMeta = manifest.data.sections.find(
       (item) => item.number === link.targetSectionNumber,
@@ -1076,11 +1104,69 @@ export function ReaderPage() {
         ? sectionMeta.startOffset + link.targetSectionOffset
         : null)
     if (target === null) return
+    const title = sectionMeta?.title ?? (link.kind === 'note' ? 'Примечание' : 'Ссылка')
+    const halfWidth = Math.min(220, window.innerWidth * 0.46)
+    const placeBelow = anchor.top < window.innerHeight * 0.48
+    setLinkPreview({
+      link,
+      title,
+      excerpt: '',
+      loading: true,
+      anchorX: Math.min(
+        window.innerWidth - halfWidth,
+        Math.max(halfWidth, anchor.left + anchor.width / 2),
+      ),
+      anchorY: placeBelow ? anchor.bottom + 8 : anchor.top - 8,
+      placeBelow,
+    })
+    void queryClient.fetchQuery({
+      queryKey: ['book', id, 'section', link.targetSectionNumber],
+      queryFn: ({ signal }) => booksApi.section(id, link.targetSectionNumber, signal),
+      staleTime: Infinity,
+    }).then((content) => {
+      const local = Math.max(0, Math.min(content.content.length, link.targetSectionOffset))
+      const start = Math.max(0, local - 180)
+      const end = Math.min(content.content.length, local + 520)
+      setLinkPreview((current) => current?.link === link ? {
+        ...current,
+        title,
+        excerpt: content.content.slice(start, end).trim() || 'У примечания нет отдельного текста.',
+        loading: false,
+      } : current)
+    }).catch(() => setLinkPreview((current) => current?.link === link ? {
+      ...current,
+      loading: false,
+      error: 'Не удалось загрузить фрагмент.',
+    } : current))
+  }
+
+  function followPreviewLink() {
+    if (!linkPreview || !manifest.data) return
+    const sectionMeta = manifest.data.sections.find((item) => item.number === linkPreview.link.targetSectionNumber)
+    const target = linkPreview.link.targetPositionOffset ??
+      (sectionMeta ? sectionMeta.startOffset + linkPreview.link.targetSectionOffset : null)
+    if (target === null) return
+    const kind = linkPreview.link.kind
+    setLinkPreview(null)
     navigateToOffset(target, {
       source: 'internal',
-      label:
-        link.kind === 'note' ? 'Переход к примечанию' : 'Внутренняя ссылка',
+      label: kind === 'note' ? 'Переход к примечанию' : 'Внутренняя ссылка',
     })
+  }
+
+  useEffect(() => {
+    if (!linkPreview) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!linkPreviewPopup.current?.contains(event.target as Node))
+        setLinkPreview(null)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [linkPreview])
+
+  function moveChapter(direction: -1 | 1) {
+    const target = mainSections[currentMainIndex + direction]
+    if (target) navigateToOffset(target.startOffset, { source: 'toc', label: target.title })
   }
 
   function columnForLocalOffset(localOffset: number) {
@@ -1357,12 +1443,49 @@ export function ReaderPage() {
       setSelectionError('Выделите не более 10 000 символов.')
       return
     }
+    const duplicate = (highlights.data ?? []).some(
+      (item) =>
+        item.startOffset === startOffset && item.endOffset === endOffset,
+    )
+    if (duplicate) {
+      selection.removeAllRanges()
+      setDraft(null)
+      setSelectionError('Этот фрагмент уже выделен.')
+      return
+    }
     setSelectionError('')
+    addHighlight.reset()
+    setSelectionEditorOpen(false)
+    setSelectionCopied(false)
+    const rect = range.getBoundingClientRect()
+    const halfWidth = Math.min(270, window.innerWidth * 0.47)
     setDraft({
       startOffset,
       endOffset,
       exactText,
+      anchorX: Math.min(window.innerWidth - halfWidth, Math.max(halfWidth, rect.left + rect.width / 2)),
+      anchorY: rect.top > 220 ? rect.top - 10 : rect.bottom + 10,
+      placeBelow: rect.top <= 220,
     })
+  }
+
+  function askAboutSelection(selection: SelectionDraft) {
+    setChatSelection(selection)
+    setDraft(null)
+    window.getSelection()?.removeAllRanges()
+    setSettingsOpen(false)
+    setNavigationOpen(false)
+    setAssistant(true, 'chat')
+  }
+
+  async function copySelection(selection: SelectionDraft) {
+    try {
+      await navigator.clipboard.writeText(selection.exactText)
+      setSelectionCopied(true)
+      window.setTimeout(() => setSelectionCopied(false), 1500)
+    } catch {
+      setSelectionError('Не удалось скопировать выделенный текст.')
+    }
   }
 
   useEffect(() => {
@@ -1457,6 +1580,8 @@ export function ReaderPage() {
           settingsOpen ||
           navigationOpen ||
           assistantOpen ||
+          shortcutHelpOpen ||
+          linkPreview !== null ||
           draft !== null ||
           bookmarkDraft !== null ||
           highlightDraft !== null ||
@@ -1468,6 +1593,8 @@ export function ReaderPage() {
         setBookmarkDraft(null)
         setHighlightDraft(null)
         setDeleteDraft(null)
+        setShortcutHelpOpen(false)
+        setLinkPreview(null)
         window.getSelection()?.removeAllRanges()
         if (hadOverlay) event.preventDefault()
         else if (!chromeVisible) {
@@ -1494,6 +1621,40 @@ export function ReaderPage() {
         event.metaKey
       )
         return
+      const key = event.key.toLocaleLowerCase('ru-RU')
+      if (event.key === '/') {
+        event.preventDefault()
+        setChromeVisible(true)
+        selectSidebarTab('search')
+        requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[aria-label="Поиск по книге"]')?.focus())
+        return
+      }
+      if (event.key === '?') {
+        event.preventDefault()
+        setShortcutHelpOpen(true)
+        return
+      }
+      if (key === 't' || key === 'е') {
+        event.preventDefault()
+        setChromeVisible(true)
+        selectSidebarTab('toc')
+        return
+      }
+      if (key === 'b' || key === 'и') {
+        event.preventDefault()
+        openBookmarkCreator()
+        return
+      }
+      if (key === 'a' || key === 'ф') {
+        event.preventDefault()
+        setAssistant(true, 'chat')
+        return
+      }
+      if (key === 'f' || key === 'а') {
+        event.preventDefault()
+        void (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen())
+        return
+      }
       if (event.key === 'ArrowRight' || event.key === 'PageDown') {
         event.preventDefault()
         move(1)
@@ -1520,6 +1681,8 @@ export function ReaderPage() {
     section.data,
     settingsOpen,
     assistantOpen,
+    shortcutHelpOpen,
+    linkPreview,
     chromeVisible,
   ])
 
@@ -1590,13 +1753,13 @@ export function ReaderPage() {
         >
           <Undo2 size={18} />
         </Button>
-        <div className="min-w-0 flex-1 px-2 text-center">
-          <p className="truncate text-sm font-semibold">
-            {manifest.data.title}
-          </p>
-          <p className="truncate text-xs text-muted">
-            {currentToc?.title ?? currentMeta?.title} · {progress}%
-          </p>
+        <div className="flex min-w-0 flex-1 items-center justify-center gap-1 px-1 text-center sm:gap-2 sm:px-2" aria-label="Навигация по главам">
+          <button type="button" className="hidden rounded-lg p-2 text-muted hover:bg-subtle disabled:opacity-30 md:inline-grid" aria-label="Предыдущая глава" disabled={currentMainIndex <= 0} onClick={() => moveChapter(-1)}><ChevronLeft size={17} /></button>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold">{currentToc?.title ?? currentMeta?.title ?? manifest.data.title}</p>
+            <p className="truncate text-xs text-muted">{manifest.data.title} · около {currentChapterMinutes} мин · {progress}%</p>
+          </div>
+          <button type="button" className="hidden rounded-lg p-2 text-muted hover:bg-subtle disabled:opacity-30 md:inline-grid" aria-label="Следующая глава" disabled={currentMainIndex >= mainSections.length - 1} onClick={() => moveChapter(1)}><ChevronRight size={17} /></button>
         </div>
         {manifest.data.format !== 'pdf' && (
           <Button
@@ -1677,7 +1840,7 @@ export function ReaderPage() {
           {assistantTab === 'summary' ? (
             <SummaryPanel key={id} id={id} chapters={manifest.data.sections} />
           ) : (
-            <BookChatPanel key={id} bookId={id} onOpenSource={(offset, label) => {
+            <BookChatPanel key={`${id}:${chatSelection ? `${chatSelection.startOffset}:${chatSelection.endOffset}` : 'chat'}`} bookId={id} initialSelection={chatSelection} onSelectionConsumed={() => setChatSelection(null)} onOpenSource={(offset, label) => {
               setAssistant(false)
               navigateToOffset(offset, { source: 'internal', label: `Чат: ${label}`, preferSmooth: false })
             }} />
@@ -2163,12 +2326,17 @@ export function ReaderPage() {
             >
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Оформление</h2>
+                <div className="flex items-center gap-1">
+                <button type="button" className="p-2 text-muted" aria-label="Горячие клавиши" title="Горячие клавиши" onClick={() => setShortcutHelpOpen(true)}>
+                  <Keyboard size={18} />
+                </button>
                 <button
                   aria-label="Закрыть настройки"
                   onClick={() => setSettingsOpen(false)}
                 >
                   <X size={19} />
                 </button>
+                </div>
               </div>
               {!['pdf', 'docx'].includes(manifest.data.format) ? (
                 <>
@@ -2232,6 +2400,8 @@ export function ReaderPage() {
                       <Plus size={16} />
                     </Button>
                   </div>
+                  <details className="mt-4 rounded-xl border border-line bg-page p-3">
+                  <summary className="cursor-pointer text-sm font-semibold">Больше настроек</summary>
                   <label htmlFor="reader-font" className="mt-4 block text-sm font-medium">
                     Шрифт
                   </label>
@@ -2322,6 +2492,7 @@ export function ReaderPage() {
                       ))}
                     </div>
                   </div>
+                  </details>
                 </>
               ) : (
                 <p className="mt-4 text-sm text-muted">
@@ -2496,7 +2667,12 @@ export function ReaderPage() {
                       <HighlightedText
                         text={section.data?.content ?? ''}
                         baseOffset={currentMeta?.startOffset ?? 0}
+                        sectionStartOffset={currentMeta?.startOffset ?? 0}
                         highlights={highlights.data ?? []}
+                        searchMatches={searchResults.data?.items ?? []}
+                        activeSearchIndex={activeSearchMatch?.index ?? null}
+                        links={section.data?.links ?? []}
+                        onNavigateLink={navigateSectionLink}
                       />
                     </article>
                   </div>
@@ -2504,38 +2680,43 @@ export function ReaderPage() {
               </div>
 
               {draft && (
-                <div className="fixed bottom-20 left-1/2 z-40 w-[min(92vw,430px)] -translate-x-1/2 rounded-2xl border border-line bg-surface p-4 text-foreground shadow-2xl">
-                  <p className="line-clamp-2 text-sm">«{draft.exactText}»</p>
-                  <div className="mt-3 flex gap-2">
-                    {(['yellow', 'green', 'blue', 'pink'] as const).map(
-                      (item) => (
-                        <button
-                          key={item}
-                          aria-label={`Цвет ${item}`}
-                          className={`h-7 w-7 rounded-full ${markColors[item].split(' ')[0]} ${color === item ? 'ring-2 ring-accent ring-offset-2' : ''}`}
-                          onClick={() => setColor(item)}
-                        />
-                      ),
-                    )}
+                <div className={`fixed z-40 max-h-[min(70vh,520px)] w-[min(94vw,540px)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-line bg-surface p-3 text-foreground shadow-2xl ${draft.placeBelow ? '' : '-translate-y-full'}`} style={{ left: draft.anchorX, top: draft.anchorY }} role="dialog" aria-label="Действия с выделенным текстом">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="line-clamp-2 min-w-0 text-sm">«{draft.exactText}»</p>
+                    <button type="button" className="shrink-0 p-1 text-muted" aria-label="Закрыть действия" onClick={() => setDraft(null)}><X size={17} /></button>
                   </div>
-                  <textarea
-                    className="mt-3 min-h-16 w-full rounded-xl border border-line px-3 py-2 text-sm"
-                    maxLength={2000}
-                    placeholder="Заметка — необязательно"
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                  />
-                  <div className="mt-3 flex justify-end gap-2">
-                    <Button variant="outline" onClick={() => setDraft(null)}>
-                      Отмена
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Button className="px-2" onClick={() => addHighlight.mutate(draft)} disabled={addHighlight.isPending}>
+                      <Highlighter size={16} /> Выделить
                     </Button>
-                    <Button
-                      onClick={() => addHighlight.mutate(draft)}
-                      disabled={addHighlight.isPending}
-                    >
-                      Сохранить
+                    <Button variant="outline" className="px-2" onClick={() => setSelectionEditorOpen((value) => !value)}>
+                      <Edit3 size={16} /> Заметка
+                    </Button>
+                    <Button variant="outline" className="px-2" onClick={() => askAboutSelection(draft)}>
+                      <MessageCircleQuestion size={16} /> Спросить
+                    </Button>
+                    <Button variant="outline" className="px-2" onClick={() => void copySelection(draft)}>
+                      <Copy size={16} /> {selectionCopied ? 'Готово' : 'Копировать'}
                     </Button>
                   </div>
+                  {addHighlight.isError && (
+                    <p className="mt-3 text-sm text-danger" role="alert">
+                      {addHighlight.error.message}
+                    </p>
+                  )}
+                  {selectionEditorOpen && (
+                    <div className="mt-3 border-t border-line pt-3">
+                      <div className="flex gap-3">
+                        {(['yellow', 'green', 'blue', 'pink'] as const).map((item) => (
+                          <button key={item} type="button" aria-label={markColorLabels[item]} aria-pressed={color === item} className={`h-8 w-8 rounded-full ${markColors[item].split(' ')[0]} ${color === item ? 'ring-2 ring-accent ring-offset-2' : ''}`} onClick={() => setColor(item)} />
+                        ))}
+                      </div>
+                      <textarea autoFocus className="mt-3 min-h-20 w-full rounded-xl border border-line px-3 py-2 text-sm" maxLength={2000} placeholder="Заметка к цитате" value={note} onChange={(event) => setNote(event.target.value)} />
+                      <div className="mt-3 flex justify-end">
+                        <Button onClick={() => addHighlight.mutate(draft)} disabled={addHighlight.isPending}>Сохранить заметку</Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2759,6 +2940,56 @@ export function ReaderPage() {
                 </ModalDialog>
               )}
 
+              {linkPreview && (
+                <section
+                  ref={linkPreviewPopup}
+                  role="dialog"
+                  aria-labelledby="link-preview-title"
+                  className={`fixed z-50 w-[min(92vw,440px)] -translate-x-1/2 rounded-2xl border border-line bg-surface p-4 text-foreground shadow-2xl ${linkPreview.placeBelow ? '' : '-translate-y-full'}`}
+                  style={{
+                    left: linkPreview.anchorX,
+                    top: linkPreview.anchorY,
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wider text-accent">{linkPreview.link.kind === 'note' ? 'Примечание' : 'Внутренняя ссылка'}</p>
+                      <h2 id="link-preview-title" className="mt-1 font-semibold">{linkPreview.title}</h2>
+                    </div>
+                    <button type="button" className="p-1 text-muted" aria-label="Закрыть предпросмотр" onClick={() => setLinkPreview(null)}><X size={18} /></button>
+                  </div>
+                  {linkPreview.loading ? (
+                    <p className="mt-4 text-sm text-muted" role="status">Загружаем фрагмент…</p>
+                  ) : linkPreview.error ? (
+                    <p className="mt-4 text-sm text-danger" role="alert">{linkPreview.error}</p>
+                  ) : (
+                    <p className="mt-3 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-xl bg-page p-3 text-sm leading-6">{linkPreview.excerpt}</p>
+                  )}
+                  <div className="mt-4 flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setLinkPreview(null)}>Закрыть</Button>
+                    <Button onClick={followPreviewLink}>Перейти</Button>
+                  </div>
+                </section>
+              )}
+
+              {shortcutHelpOpen && (
+                <ModalDialog
+                  labelledBy="reader-shortcuts-title"
+                  onClose={() => setShortcutHelpOpen(false)}
+                  className="w-full max-w-md rounded-2xl border border-line bg-surface p-5 text-foreground shadow-2xl"
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <h2 id="reader-shortcuts-title" className="font-semibold">Горячие клавиши</h2>
+                    <button type="button" className="p-1 text-muted" aria-label="Закрыть справку" onClick={() => setShortcutHelpOpen(false)}><X size={18} /></button>
+                  </div>
+                  <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm">
+                    {[['← / →', 'Назад и вперёд'], ['Page Up / Page Down', 'Перелистывание'], ['/', 'Поиск по книге'], ['T', 'Оглавление'], ['B', 'Добавить закладку'], ['A', 'Открыть Книжника'], ['F', 'Полный экран'], ['?', 'Эта справка'], ['Esc', 'Закрыть окно или показать панели']].map(([key, label]) => (
+                      <div key={key} className="contents"><dt><kbd className="rounded-md border border-line bg-page px-2 py-1 font-mono text-xs">{key}</kbd></dt><dd className="text-muted">{label}</dd></div>
+                    ))}
+                  </dl>
+                </ModalDialog>
+              )}
+
               {navigationOpen && (
                 <section
                   id="reader-navigation"
@@ -2908,9 +3139,9 @@ export function ReaderPage() {
                   }}
                   title="Перейти к проценту или позиции"
                 >
-                  <div className="h-1.5 overflow-hidden rounded-full bg-subtle">
+                  <div className="h-2 overflow-hidden rounded-full bg-subtle" aria-hidden="true">
                     <div
-                      className="h-full rounded-full bg-teal-600"
+                      className="h-full overflow-hidden rounded-full bg-teal-600"
                       style={{ width: `${progress}%` }}
                     />
                   </div>

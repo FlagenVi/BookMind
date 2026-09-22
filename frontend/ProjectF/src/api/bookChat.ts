@@ -2,6 +2,12 @@ import { request } from './client'
 
 export type BookChatMode = 'grounded' | 'model_knowledge'
 
+export interface BookChatSelection {
+  startOffset: number
+  endOffset: number
+  exactText: string
+}
+
 export interface BookChatThread {
   id: string
   title: string
@@ -55,14 +61,21 @@ export const bookChatApi = {
   send: (
     bookId: string,
     threadId: string,
-    input: { id: string; question: string; mode: BookChatMode },
+    input: { id: string; question: string; mode: BookChatMode; selection?: BookChatSelection },
   ) =>
     request<BookChatTurn>(
       `${path(bookId)}/${encodeURIComponent(threadId)}/turns`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          id: input.id,
+          question: input.question,
+          mode: input.mode,
+          selectedStart: input.selection?.startOffset,
+          selectedEnd: input.selection?.endOffset,
+          selectedText: input.selection?.exactText,
+        }),
         signal: AbortSignal.timeout(150_000),
       },
     ),

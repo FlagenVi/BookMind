@@ -17,6 +17,29 @@ public final class BookChatContext {
 
     private BookChatContext() {}
 
+    public static Selection selectedFragment(String book,int confirmedOffset,int startOffset,int endOffset,String exactText,List<Section> sections) {
+        int boundary=Math.max(0,Math.min(book.length(),Math.max(confirmedOffset,endOffset)));
+        int start=Math.max(0,Math.min(boundary,startOffset));
+        int end=Math.max(start,Math.min(boundary,endOffset));
+        if(end<=start || end-start>10_000 || exactText==null || !book.substring(start,end).equals(exactText))
+            throw new IllegalArgumentException("Выделенный фрагмент изменился или находится за пределами прочитанного текста");
+        Section section=sections.stream().filter(item->start>=item.start() && start<item.end()).findFirst()
+                .orElse(new Section(0,"Выделенный фрагмент",start,end));
+        // Selecting text is an explicit request to use its immediate surroundings.
+        // Include both sides even when the saved reading anchor is at the beginning
+        // of the visible paragraph, otherwise a name at the anchor looks like a title.
+        int contextStart=Math.max(section.start(),start-800);
+        int contextEnd=Math.min(section.end(),end+1200);
+        Reference reference=new Reference(section.number(),section.title(),contextStart,contextEnd);
+        String before=book.substring(contextStart,start);
+        String after=book.substring(end,contextEnd);
+        String text="[1] "+section.title()+" (позиции "+contextStart+"–"+contextEnd+")\n"
+                +"Контекст перед выделением:\n"+before
+                +"\n\nВыделенный пользователем фрагмент:\n<<<\n"+exactText+"\n>>>"
+                +"\n\nКонтекст после выделения:\n"+after;
+        return new Selection(text,List.of(reference),boundary);
+    }
+
     public static Selection select(String book,int confirmedOffset,String question,List<Section> sections) {
         int boundary=Math.max(0,Math.min(book.length(),confirmedOffset));
         if(boundary==0) return new Selection("",List.of(),0);

@@ -491,9 +491,14 @@ public class BookController {
             if(matched==null) throw new ResponseStatusException(HttpStatus.CONFLICT,"Текст книги изменился");
             start=matched[0];end=matched[1];actual=doc.getOriginalText().substring(start,end);
         }
+        UUID userId=owner(auth);
+        Integer duplicates=jdbc.queryForObject("SELECT count(*) FROM reader_highlights WHERE user_id=? AND document_id=? AND start_offset=? AND end_offset=?",
+                Integer.class,userId,id,start,end);
+        if(duplicates!=null && duplicates>0)
+            throw new ResponseStatusException(HttpStatus.CONFLICT,"Этот фрагмент уже выделен");
         UUID highlightId=UUID.randomUUID(); Instant now=Instant.now(); String color=input.color()==null?"yellow":input.color();
         jdbc.update("INSERT INTO reader_highlights(id,user_id,document_id,start_offset,end_offset,color,exact_text,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                highlightId,owner(auth),id,start,end,color,actual,clean(input.note()),java.sql.Timestamp.from(now),java.sql.Timestamp.from(now));
+                highlightId,userId,id,start,end,color,actual,clean(input.note()),java.sql.Timestamp.from(now),java.sql.Timestamp.from(now));
         return new Highlight(highlightId,start,end,color,actual,clean(input.note()),now,now);
     }
     @PutMapping("/{id}/highlights/{highlightId}") Highlight updateHighlight(Authentication auth,@PathVariable UUID id,

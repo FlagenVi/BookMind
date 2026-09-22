@@ -16,12 +16,15 @@ import {
 } from '@tanstack/react-query'
 import {
   BookOpen,
+  Bell,
   FileText,
   Files,
   Menu,
+  MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
   UserRound,
+  Users,
   X,
   type LucideIcon,
 } from 'lucide-react'
@@ -35,6 +38,11 @@ import { DocumentPage, DocumentsPage } from './pages/HistoryPage'
 import { LibraryPage } from './pages/LibraryPage'
 import { ProfilePage } from './pages/ProfilePage'
 import { ReaderPage } from './pages/ReaderPage'
+import {
+  CommunitiesPage,
+  CommunicationPage,
+  NotificationsPage,
+} from './pages/SocialPages'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30000 } },
@@ -49,6 +57,9 @@ type NavigationItem = {
 const navigation: NavigationItem[] = [
   { to: '/library', title: 'Библиотека', Icon: BookOpen },
   { to: '/documents', title: 'Документы', Icon: Files },
+  { to: '/communication', title: 'Общение', Icon: MessageCircle },
+  { to: '/communities', title: 'Сообщества', Icon: Users },
+  { to: '/notifications', title: 'Уведомления', Icon: Bell },
 ]
 
 function readSidebarCollapsed() {
@@ -165,7 +176,7 @@ function AppShell() {
                 <span className="rounded-lg bg-teal-700 p-1.5 text-white">
                   <FileText size={19} aria-hidden="true" />
                 </span>
-                Суть текста
+                BookMind
               </Link>
               <button
                 ref={mobileMenuTrigger}
@@ -202,7 +213,7 @@ function AppShell() {
               >
                 <Link
                   to="/library"
-                  title={collapsed ? 'Суть текста' : undefined}
+                  title={collapsed ? 'BookMind' : undefined}
                   className={`brand-link flex min-w-0 flex-1 items-center gap-3 rounded-xl font-bold tracking-tight ${collapsed ? 'md:justify-center' : ''}`}
                   onClick={closeMobile}
                 >
@@ -212,7 +223,7 @@ function AppShell() {
                   <span
                     className={`truncate text-lg ${collapsed ? 'md:hidden' : ''}`}
                   >
-                    Суть текста
+                    BookMind
                   </span>
                 </Link>
                 <button
@@ -508,6 +519,30 @@ function AppRoutes() {
         element={
           <RequireAuth>
             <DocumentPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/communication"
+        element={
+          <RequireAuth>
+            <CommunicationPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/communities"
+        element={
+          <RequireAuth>
+            <CommunitiesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/notifications"
+        element={
+          <RequireAuth>
+            <NotificationsPage />
           </RequireAuth>
         }
       />

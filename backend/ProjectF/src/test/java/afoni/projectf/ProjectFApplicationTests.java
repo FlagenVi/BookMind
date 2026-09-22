@@ -84,10 +84,11 @@ class ProjectFApplicationTests {
         org.mockito.Mockito.verifyNoInteractions(bookChatClient);
         var calls=new java.util.concurrent.atomic.AtomicInteger();
         var sent=new java.util.concurrent.atomic.AtomicReference<String>();
+        var sentMessageCount=new java.util.concurrent.atomic.AtomicInteger();
         org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("deepseek-flash")))
                 .thenAnswer(invocation->{
                     java.util.List<afoni.projectf.service.BookChatClient.Message> messages=invocation.getArgument(0);
-                    sent.set(messages.getLast().content());calls.incrementAndGet();
+                    sent.set(messages.getLast().content());sentMessageCount.set(messages.size());calls.incrementAndGet();
                     return new afoni.projectf.service.BookChatClient.Result("Герой находит письмо [1].",120,35);
                 });
         UUID first=UUID.randomUUID();
@@ -108,6 +109,20 @@ class ProjectFApplicationTests {
         assertEquals(2,calls.get());
         assertFalse(sent.get().contains("Герой находит письмо"));
         assertNull(jdbc.queryForObject("SELECT source_excerpt FROM book_chat_turns WHERE id=?",String.class,second));
+        jdbc.update("UPDATE reading_progress SET position_offset=0,confirmed_offset=0 WHERE user_id=? AND document_id=?",user,book);
+        UUID selectedTurn=UUID.randomUUID();
+        mvc.perform(post(path+"/"+thread+"/turns").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\""+selectedTurn+"\",\"mode\":\"model_knowledge\",\"question\":\"Что означает выделенный фрагмент?\",\"selectedStart\":0,\"selectedEnd\":5,\"selectedText\":\"Герой\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ready"))
+                .andExpect(jsonPath("$.mode").value("grounded"))
+                .andExpect(jsonPath("$.positionOffset").value(5))
+                .andExpect(jsonPath("$.references.length()").value(1));
+        assertEquals(3,calls.get());
+        assertEquals(2,sentMessageCount.get());
+        assertTrue(sent.get().contains("Книга: Тестовая книга. Автор: Автор."));
+        assertTrue(sent.get().contains("Выделенный пользователем фрагмент:\n<<<\nГерой\n>>>"));
+        assertTrue(jdbc.queryForObject("SELECT source_excerpt FROM book_chat_turns WHERE id=?",String.class,selectedTurn).contains("<<<\nГерой\n>>>"));
+        jdbc.update("UPDATE reading_progress SET position_offset=?,confirmed_offset=? WHERE user_id=? AND document_id=?",confirmed,confirmed,user,book);
         org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("deepseek-flash")))
                 .thenThrow(new afoni.projectf.service.BookChatClient.Failure("Ответ достиг лимита",80,1200));
         UUID failed=UUID.randomUUID();
@@ -116,7 +131,7 @@ class ProjectFApplicationTests {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("failed"))
                 .andExpect(jsonPath("$.completionTokens").value(1200));
         mvc.perform(get(path+"/"+thread+"/turns").session(owner)).andExpect(status().isOk())
-                .andExpect(jsonPath("$[2].status").value("failed"));
+                .andExpect(jsonPath("$[3].status").value("failed"));
         mvc.perform(delete(path+"/"+thread).session(owner).with(csrf())).andExpect(status().isNoContent());
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM book_chat_turns WHERE thread_id=?",Integer.class,thread));
         jdbc.update("DELETE FROM documents WHERE id=?",book);
@@ -659,6 +674,9 @@ class ProjectFApplicationTests {
         var highlightResult=mvc.perform(post("/api/books/"+id+"/highlights").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"startOffset\":"+start+",\"endOffset\":"+end+",\"color\":\"yellow\",\"note\":\"Через разделы\"}"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.exactText").value(exact)).andReturn();
+        mvc.perform(post("/api/books/"+id+"/highlights").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"startOffset\":"+start+",\"endOffset\":"+end+",\"color\":\"green\"}"))
+                .andExpect(status().isConflict());
         String highlightId=JsonPath.read(highlightResult.getResponse().getContentAsString(),"$.id");
         mvc.perform(put("/api/books/"+id+"/highlights/"+highlightId).session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"color\":\"blue\",\"note\":\"Исправленная заметка\"}"))
@@ -1149,7 +1167,7 @@ class ProjectFApplicationTests {
 
     @Test
     void migrationsAreAppliedOnceAndLongNotesRoundTrip() {
-        assertEquals(27, flyway.info().applied().length);
+        assertEquals(28, flyway.info().applied().length);
         assertEquals(0, flyway.migrate().migrationsExecuted);
         Note note = new Note();
         note.setTitle("Migration test");
@@ -1201,7 +1219,7 @@ class ProjectFApplicationTests {
                 .locations("classpath:db/migration").baselineVersion("0").load();
         // Explicit adoption is tested; normal startup never baselines automatically.
         legacy.baseline();
-        assertEquals(27, legacy.migrate().migrationsExecuted);
+        assertEquals(28, legacy.migrate().migrationsExecuted);
         assertEquals("Keep this record", jdbc.queryForObject("SELECT content FROM legacy_test.note WHERE id = 1", String.class));
         assertEquals("text", jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_test' AND table_name = 'note' AND column_name = 'content'", String.class));
     }
