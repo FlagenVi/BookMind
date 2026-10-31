@@ -31,6 +31,7 @@ import { booksApi, type BookItem } from './api/books'
 import { readingProgress, recallPath } from './library/recall'
 import { RequireAuth } from './components/RequireAuth'
 import { ThemeToggle } from './components/ThemeToggle'
+import { LogoutButton } from './components/LogoutButton'
 import { SocialRuntime } from './social/SocialRuntime'
 import { useSocialUnread } from './social/useSocialUnread'
 
@@ -368,7 +369,12 @@ function AppShell() {
                     </span>
                   )}
                 </NavLink>
-                <ThemeToggle compact={collapsed} />
+                <div
+                  className={`mt-2 flex gap-2 ${collapsed ? 'md:flex-col' : ''}`}
+                >
+                  <ThemeToggle compact={collapsed} className="mt-0 flex-1" />
+                  <LogoutButton compact={collapsed} />
+                </div>
               </footer>
             </aside>
 
@@ -418,7 +424,13 @@ function AppShell() {
               </div>
             }
           >
-            <AppRoutes />
+            {isReader ? (
+              <AppRoutes />
+            ) : (
+              <div key={location.pathname} className="page-enter">
+                <AppRoutes />
+              </div>
+            )}
           </Suspense>
         </main>
       </div>

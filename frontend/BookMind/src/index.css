@@ -361,10 +361,125 @@
     opacity: 0.45;
   }
 
-  @supports selector(select:open) {
-    .ui-select:has(.ui-select-control:open) .ui-select-icon {
-      transform: translateY(-50%) rotate(180deg);
+  /* The select is a button with a custom list, styled like the other fields. */
+  .ui-select-control {
+    background-color: var(--app-surface);
+    color: var(--app-foreground);
+    transition:
+      background-color 180ms ease,
+      border-color 180ms ease,
+      box-shadow 220ms ease;
+  }
+
+  .ui-select-control:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .ui-select-control:focus-visible,
+  .ui-select[data-open] .ui-select-control {
+    outline: none;
+    border-color: var(--app-accent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-accent) 14%, transparent);
+  }
+
+  .ui-select[data-open] .ui-select-icon {
+    color: var(--app-accent);
+    transform: translateY(-50%) rotate(180deg);
+  }
+
+  @keyframes ui-listbox-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.98);
     }
+  }
+
+  @keyframes ui-listbox-in-above {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+  }
+
+  .ui-listbox {
+    transform-origin: top;
+    animation: ui-listbox-in 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
+    box-shadow:
+      0 18px 40px rgb(2 6 23 / 18%),
+      0 2px 6px rgb(2 6 23 / 8%);
+  }
+
+  .ui-listbox[data-placement='above'] {
+    transform-origin: bottom;
+    animation-name: ui-listbox-in-above;
+  }
+
+  .ui-listbox [role='option'] {
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+
+  /* Dialogs: the backdrop fades in, the panel rises; on phones it is a bottom sheet. */
+  @keyframes modal-overlay-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  @keyframes modal-panel-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.98);
+    }
+  }
+
+  @keyframes modal-sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+  }
+
+  @keyframes modal-side-in {
+    from {
+      transform: translateX(100%);
+    }
+  }
+
+  .modal-overlay {
+    animation: modal-overlay-in 180ms ease-out;
+  }
+
+  .modal-dialog-panel {
+    animation: modal-panel-in 220ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+
+  .modal-dialog-panel[data-placement='right'] {
+    animation-name: modal-side-in;
+  }
+
+  @media (max-width: 639px) {
+    .modal-dialog-panel[data-placement='center'] {
+      animation-name: modal-sheet-in;
+    }
+  }
+
+  /* Opacity only: a transform would re-anchor fixed elements (dialogs, backdrops) to the page while it animates. */
+  @keyframes page-in {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .page-enter {
+    animation: page-in 240ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+
+  .logout-button:not(:disabled):hover {
+    border-color: color-mix(in srgb, var(--app-danger) 45%, var(--app-line));
+    background: var(--app-danger-soft);
+    color: var(--app-danger);
   }
 
   .ui-button-primary {

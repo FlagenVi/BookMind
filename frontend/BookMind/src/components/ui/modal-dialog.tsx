@@ -84,7 +84,7 @@ export function ModalDialog({
 
   return (
     <div
-      className={`fixed inset-0 z-50 grid bg-black/45 backdrop-blur-sm ${placement === 'right' ? 'justify-items-end p-0' : 'place-items-end p-0 sm:place-items-center sm:p-5'}`}
+      className={`modal-overlay fixed inset-0 z-50 grid bg-black/45 backdrop-blur-sm ${placement === 'right' ? 'justify-items-end p-0' : 'place-items-end p-0 sm:place-items-center sm:p-5'}`}
       role="presentation"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target && !closeDisabled) onClose()
@@ -97,6 +97,7 @@ export function ModalDialog({
         aria-labelledby={labelledBy}
         aria-describedby={describedBy}
         tabIndex={-1}
+        data-placement={placement}
         className={`modal-dialog-panel ${className}`}
       >
         {children}

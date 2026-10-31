@@ -22,7 +22,7 @@ import {
   UserRound,
   ArrowLeft,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { authApi, type UserSession } from '../api/auth'
 import {
   readingApi,
@@ -35,6 +35,7 @@ import { ModalDialog } from '../components/ui/modal-dialog'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { PrivacySettings } from '../components/PrivacySettings'
 import { bookFormatLabel } from '../library/bookDetailsFormat'
+import { useLogout } from '../components/useLogout'
 
 type Period = 'day' | 'week' | 'month'
 
@@ -91,7 +92,6 @@ function SessionDeviceIcon({ type }: { type: UserSession['deviceType'] }) {
 
 export function ProfilePage() {
   const client = useQueryClient()
-  const navigate = useNavigate()
   const [period, setPeriod] = useState<Period>('week')
   const [goalDraft, setGoalDraft] = useState<ReadingGoal | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -117,15 +117,7 @@ export function ProfilePage() {
     queryFn: ({ signal }) => authApi.sessions(signal),
   })
 
-  const logout = useMutation({
-    mutationFn: authApi.logout,
-    onSuccess: async () => {
-      await client.cancelQueries()
-      client.clear()
-      client.setQueryData(['me'], null)
-      navigate('/auth', { replace: true })
-    },
-  })
+  const logout = useLogout()
   const saveGoal = useMutation({
     mutationFn: readingApi.saveGoal,
     onSuccess: (saved) => {
