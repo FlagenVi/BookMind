@@ -81,7 +81,7 @@ export function DocumentsPage() {
           </p>
         </div>
         <Button asChild className="w-full sm:w-auto">
-          <Link to="/">Добавить документ</Link>
+          <Link to="/documents/new">Добавить документ</Link>
         </Button>
       </div>
       <section aria-label="Поиск и отображение документов" className="mt-8 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 lg:flex-row lg:items-center">
@@ -167,7 +167,7 @@ export function DocumentsPage() {
           {hasSelection ? (
             <Button variant="outline" className="mt-5" onClick={() => { setSearch(''); setFormat('all'); setSort('updated'); setDirection('desc'); setPage(0) }}>Сбросить поиск и фильтры</Button>
           ) : (
-            <Button asChild className="mt-5"><Link to="/">Добавить материал</Link></Button>
+            <Button asChild className="mt-5"><Link to="/documents/new">Добавить материал</Link></Button>
           )}
         </div>
       ) : (

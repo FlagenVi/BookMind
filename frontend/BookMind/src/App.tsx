@@ -17,16 +17,18 @@ import {
 import {
   BookOpen,
   Bell,
-  FileText,
+  BookMarked,
   Files,
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  Sparkles,
   UserRound,
   type LucideIcon,
 } from 'lucide-react'
 import { authApi } from './api/auth'
 import { booksApi, type BookItem } from './api/books'
+import { readingProgress, recallPath } from './library/recall'
 import { RequireAuth } from './components/RequireAuth'
 import { ThemeToggle } from './components/ThemeToggle'
 import { SocialRuntime } from './social/SocialRuntime'
@@ -117,6 +119,7 @@ const mobileNavigation: NavigationItem[] = [
 
 function mobilePageTitle(pathname: string) {
   if (pathname.startsWith('/library')) return 'Библиотека'
+  if (pathname === '/documents/new') return 'Новый материал'
   if (pathname.startsWith('/documents')) return 'Документы'
   if (pathname.startsWith('/communication')) return 'Общение'
   if (pathname.startsWith('/people/')) return 'Читатель'
@@ -204,7 +207,7 @@ function AppShell() {
                 aria-label="BookMind — библиотека"
               >
                 <span className="grid size-9 place-items-center rounded-xl bg-primary">
-                  <FileText size={19} aria-hidden="true" />
+                  <BookMarked size={19} aria-hidden="true" />
                 </span>
               </Link>
               <div className="min-w-0 px-2 text-center">
@@ -243,7 +246,7 @@ function AppShell() {
                   className={`brand-link flex min-w-0 flex-1 items-center gap-3 rounded-xl font-bold tracking-tight ${collapsed ? 'md:justify-center' : ''}`}
                 >
                   <span className="shrink-0 rounded-xl bg-primary p-2 text-white">
-                    <FileText size={21} aria-hidden="true" />
+                    <BookMarked size={21} aria-hidden="true" />
                   </span>
                   <span
                     className={`truncate text-lg ${collapsed ? 'md:hidden' : ''}`}
@@ -434,8 +437,8 @@ function CurrentBook({
   collapsed: boolean
   onNavigate: () => void
 }) {
-  const progress = book?.textLength
-    ? Math.min(100, Math.round((book.positionOffset * 100) / book.textLength))
+  const progress = book
+    ? readingProgress(book.positionOffset, book.textLength)
     : 0
 
   return (
@@ -489,6 +492,13 @@ function CurrentBook({
             >
               Продолжить чтение
             </Link>
+            <Link
+              to={recallPath(book.id)}
+              className="mt-1.5 flex min-h-9 items-center justify-center gap-1.5 rounded-xl px-3 text-xs font-semibold text-secondary transition hover:bg-subtle hover:text-accent"
+              onClick={onNavigate}
+            >
+              <Sparkles size={14} aria-hidden="true" /> Вспомнить прочитанное
+            </Link>
           </div>
         ) : (
           <div className="rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-muted">
@@ -532,8 +542,10 @@ function CurrentBook({
 function AppRoutes() {
   return (
     <Routes>
+      {/* Reading is the main scenario, so the library is the home page. */}
+      <Route path="/" element={<Navigate to="/library" replace />} />
       <Route
-        path="/"
+        path="/documents/new"
         element={
           <RequireAuth>
             <EditorPage />
@@ -654,10 +666,5 @@ function LegacyDocumentRedirect() {
 
 function LegacyBookContextRedirect() {
   const { id = '' } = useParams()
-  return (
-    <Navigate
-      to={`/library/${encodeURIComponent(id)}/read?panel=book&tab=summary`}
-      replace
-    />
-  )
+  return <Navigate to={recallPath(id)} replace />
 }

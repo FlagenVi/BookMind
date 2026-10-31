@@ -103,10 +103,13 @@ export function SummaryPanel({
     activeElsewhere && activeJob.scope === 'read' && scope === 'read'
   return (
     <section className="mt-6 rounded-xl border border-accent-line bg-surface p-5">
-      <h2 className="text-lg font-semibold">Изложение материала</h2>
+      <h2 className="text-lg font-semibold">
+        {chapters ? 'Вспомнить прочитанное' : 'Изложение материала'}
+      </h2>
       <p className="mt-2 text-sm text-muted">
-        Выбранный текст отправляется в DeepSeek целиком. Если он слишком большой,
-        главы объединяются в несколько томов. Результат сохраняется автоматически.
+        {chapters
+          ? 'Краткий пересказ поможет вернуться к книге после перерыва: события, герои и то, чем всё закончилось на вашем месте. Готовые пересказы сохраняются.'
+          : 'Выбранный текст отправляется в DeepSeek целиком. Если он слишком большой, главы объединяются в несколько томов. Результат сохраняется автоматически.'}
       </p>
       {chapters && (
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -147,7 +150,7 @@ export function SummaryPanel({
         <p className="mt-3 text-sm text-muted">
           {noProgress
             ? 'Позиция чтения ещё не сохранена. Начните читать, и изложение охватит только прочитанное.'
-            : `В запрос попадёт только текст до сохранённой позиции чтения (≈${state.readPercent ?? 0}% книги). Следующие главы и непрочитанная часть текущей не отправляются.`}
+            : `Пересказ охватит книгу до самого дальнего места, до которого вы дочитали (≈${state.readPercent ?? 0}%). Дальнейший текст в него не попадает — спойлеров не будет.`}
         </p>
       )}
       <label htmlFor="summary-level" className="mt-4 block text-sm font-medium">

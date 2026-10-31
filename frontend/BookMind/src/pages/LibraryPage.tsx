@@ -45,6 +45,7 @@ import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
 import { SideDrawer } from '../components/ui/side-drawer'
 import { bookFormatLabel, languageDisplayName } from '../library/bookDetailsFormat'
+import { ContinueReading } from '../components/ContinueReading'
 import {
   bookPageQueries,
   setCachedBookFavorite,
@@ -496,6 +497,8 @@ export function LibraryPage() {
           <Plus size={18} /> Добавить книгу
         </Button>
       </header>
+
+      <ContinueReading />
 
       <section
         aria-label="Коллекции"

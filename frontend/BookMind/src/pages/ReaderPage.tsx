@@ -11,7 +11,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
   BookOpen,
-  BookText,
+  Sparkles,
   Bookmark as BookmarkIcon,
   ChevronDown,
   ChevronLeft,
@@ -1834,19 +1834,21 @@ export function ReaderPage() {
             <BookmarkIcon size={18} />
           </Button>
         )}
+        {/* The main feature gets a visible label; on phones only the icon fits. */}
         <Button
-          variant="outline"
+          variant={assistantOpen ? 'outline' : 'default'}
           className="px-3"
-          aria-label="Помощник по книге"
-          title="Изложение и чат по книге"
+          aria-label="Вспомнить прочитанное и чат по книге"
+          title="Вспомнить прочитанное без спойлеров и спросить Книжника"
           aria-expanded={assistantOpen}
           onClick={() => {
             setSettingsOpen(false)
             setNavigationOpen(false)
-            setAssistant(!assistantOpen)
+            setAssistant(!assistantOpen, 'summary')
           }}
         >
-          <BookText size={18} />
+          <Sparkles size={18} aria-hidden="true" />
+          <span className="hidden md:inline">Вспомнить</span>
         </Button>
         <Button
           variant="outline"
