@@ -31,12 +31,12 @@
 /.aider*
 /CLAUDE.md
 /GEMINI.md
-/backend/ProjectF/AUTH_API.md
-/backend/ProjectF/DATABASE.md
-/backend/ProjectF/HELP.md
-/backend/ProjectF/PREPARATION.md
-/backend/ProjectF/SUMMARIZATION.md
-/backend/ProjectF/SUMMARIZATION_V2.md
+/backend/BookMind/AUTH_API.md
+/backend/BookMind/DATABASE.md
+/backend/BookMind/HELP.md
+/backend/BookMind/PREPARATION.md
+/backend/BookMind/SUMMARIZATION.md
+/backend/BookMind/SUMMARIZATION_V2.md
 
 # -----------------------------------------------------------------------------
 # Java / Gradle / Spring Boot
@@ -102,11 +102,11 @@
 /uploads/
 /storage/
 /data/
-/backend/ProjectF/tmp/
-/backend/ProjectF/temp/
-/backend/ProjectF/uploads/
-/backend/ProjectF/storage/
-/backend/ProjectF/data/
+/backend/BookMind/tmp/
+/backend/BookMind/temp/
+/backend/BookMind/uploads/
+/backend/BookMind/storage/
+/backend/BookMind/data/
 **/*.db
 **/*.db-journal
 **/*.sqlite
