@@ -24,6 +24,26 @@ class BookChatContextTests {
         assertTrue(selected.text().length()<15000);
     }
 
+    @Test void stemmingMatchesOtherWordForms() {
+        assertEquals(BookChatContext.stem("письмо"),BookChatContext.stem("письмом"));
+        assertEquals(BookChatContext.stem("письмо"),BookChatContext.stem("Письма"));
+        assertEquals(BookChatContext.stem("Анна"),BookChatContext.stem("Анны"));
+        assertEquals(BookChatContext.stem("ёлка"),BookChatContext.stem("елкой"));
+    }
+
+    @Test void findsInflectedFormsAndPrefersRareWords() {
+        String filler="Герой шёл по дороге и думал о доме. ".repeat(600);
+        String letter="Наконец герой нашёл старое письмо, написанное рукой Марфы. ";
+        String text=filler+letter+filler+"Конец прочитанного. ";
+        // No word of the question appears in the text in exactly this form.
+        var selected=BookChatContext.select(text,text.length(),"Что Марфа сообщила герою в письме?",
+                List.of(new BookChatContext.Section(1,"Глава",0,text.length())));
+        int at=text.indexOf(letter);
+        // The rare words "письмо" and "Марфа" are found in other forms, while the frequent "герой" does not dominate.
+        assertTrue(selected.references().stream().anyMatch(ref->ref.startOffset()<=at && ref.endOffset()>=at+letter.length()));
+        assertEquals(text.length(),selected.references().getLast().endOffset());
+    }
+
     @Test void selectedFragmentUsesExactTextAndIncludesImmediateSurroundings() {
         String text="До выделения. Важная цитата героя. После выделения.";
         int start=text.indexOf("Важная");

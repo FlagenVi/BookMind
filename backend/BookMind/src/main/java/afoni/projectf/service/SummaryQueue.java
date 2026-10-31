@@ -50,7 +50,7 @@ public class SummaryQueue {
         String text=jdbc.queryForObject("SELECT original_text FROM documents WHERE id=?",String.class,document);
         String format=jdbc.queryForObject("SELECT source_type FROM documents WHERE id=?",String.class,document);
         var chapters=new ArrayList<ChapterPart>();
-        if("read".equals(scope)) chapters.addAll(readParts(document,format,text,selectedSection));
+        if("read".equals(scope)) chapters.addAll(readParts(document,format,text,0,selectedSection));
         else if(Set.of("fb2","epub","novel").contains(format)) {
             var bookSections=jdbc.queryForList("SELECT section_number,title,role,content FROM reader_sections WHERE document_id=? ORDER BY section_number",document);
             if(!bookSections.isEmpty()) {
@@ -75,6 +75,13 @@ public class SummaryQueue {
         }
         String whole=chapterText(chapters);
         if(whole.isBlank()) throw new IllegalStateException("Document has no prepared text");
+        String update="read".equals(scope) && !"novel".equals(format)?incrementalInput(job,document,format,text,selectedSection,whole):null;
+        if(update!=null) {
+            insert(job,0,0,-1,update);
+            jdbc.update("UPDATE summary_jobs SET pipeline_version=4,input_characters=?,source_characters=? WHERE id=?",update.length(),whole.length(),job);
+            return;
+        }
+        jdbc.update("UPDATE summary_jobs SET incremental_base_id=NULL,input_characters=?,source_characters=? WHERE id=?",whole.length(),whole.length(),job);
         if(whole.getBytes(StandardCharsets.UTF_8).length<=DIRECT_INPUT_BYTES) {
             insert(job,0,0,-1,whole);
         } else {
@@ -87,22 +94,43 @@ public class SummaryQueue {
         }
         jdbc.update("UPDATE summary_jobs SET pipeline_version=4 WHERE id=?",job);
     }
+    // Extends the latest ready summary for an earlier position with only the text read since then.
+    // Returns null when a full summary is the better choice: no base, nothing new, or no savings.
+    private String incrementalInput(UUID job,UUID document,String format,String text,int boundary,String whole) {
+        var bases=jdbc.queryForList("SELECT b.scope_section_number AS boundary,s.id,s.summary_text FROM summary_jobs j "+
+                "JOIN summary_jobs b ON b.document_id=j.document_id AND b.compression_level=j.compression_level AND b.scope_mode='read' "+
+                "AND b.status='ready' AND b.scope_section_number<? AND b.source_revision=j.source_revision "+
+                "JOIN summaries s ON s.id=b.result_id WHERE j.id=? ORDER BY b.scope_section_number DESC LIMIT 1",boundary,job);
+        if(bases.isEmpty()) return null;
+        var base=bases.getFirst();
+        String added=chapterText(readParts(document,format,text,((Number)base.get("boundary")).intValue(),boundary));
+        if(added.isBlank()) return null;
+        String input="Пересказ прочитанного ранее:\n<<<\n"+base.get("summary_text")+"\n>>>\n\nНовый прочитанный фрагмент:\n<<<\n"+added+"\n>>>";
+        if(input.length()>=whole.length() || input.getBytes(StandardCharsets.UTF_8).length>DIRECT_INPUT_BYTES) return null;
+        jdbc.update("UPDATE summary_jobs SET incremental_base_id=? WHERE id=?",base.get("id"),job);
+        return input;
+    }
     // Never reads past the boundary: later chapters, the rest of the current chapter and end notes stay out of the request.
-    private List<ChapterPart> readParts(UUID document,String format,String text,int boundary) {
+    // A non-zero start returns only the text after it; novels are always read whole because chapters may be read out of order.
+    private List<ChapterPart> readParts(UUID document,String format,String text,int from,int boundary) {
         boolean novel="novel".equals(format);
         int limit=Math.min(Math.max(0,boundary),text.length());
+        int first=novel?0:Math.min(Math.max(0,from),limit);
         var sections=novel
                 ? jdbc.queryForList("SELECT s.title,s.start_offset,LEAST(s.end_offset,s.start_offset+n.confirmed_offset) AS end_offset FROM reader_sections s JOIN novel_chapters n ON n.id=s.novel_chapter_id WHERE s.document_id=? AND s.role='main' AND n.confirmed_offset>0 ORDER BY s.section_number",document)
-                : jdbc.queryForList("SELECT title,start_offset,end_offset FROM reader_sections WHERE document_id=? AND role='main' AND start_offset<? ORDER BY section_number",document,limit);
+                : jdbc.queryForList("SELECT title,start_offset,end_offset FROM reader_sections WHERE document_id=? AND role='main' AND start_offset<? AND end_offset>? ORDER BY section_number",document,limit,first);
         var parts=new ArrayList<ChapterPart>();
         for(var row:sections) {
-            int start=Math.min(((Number)row.get("start_offset")).intValue(),text.length());
+            int sectionStart=Math.min(((Number)row.get("start_offset")).intValue(),text.length());
+            int start=Math.max(sectionStart,first);
             int end=Math.min(((Number)row.get("end_offset")).intValue(),novel?text.length():limit);
             if(end<=start) continue;
             String content=text.substring(start,end);
-            if(!content.isBlank()) parts.addAll(structuredParts(((String)row.get("title")).strip(),content));
+            String title=((String)row.get("title")).strip()+(start>sectionStart?" (продолжение)":"");
+            if(!content.isBlank()) parts.addAll(structuredParts(title,content));
         }
-        if(parts.isEmpty() && !novel && !text.substring(0,limit).isBlank()) parts.add(new ChapterPart("Прочитанная часть",text.substring(0,limit)));
+        if(parts.isEmpty() && !novel && !text.substring(first,limit).isBlank())
+            parts.add(new ChapterPart(first>0?"Прочитанное продолжение":"Прочитанная часть",text.substring(first,limit)));
         return parts;
     }
     private static String chapterText(List<ChapterPart> chapters) {
@@ -173,7 +201,8 @@ public class SummaryQueue {
             var steps=jdbc.queryForList("SELECT step_number,input_text,section_number,repair_text FROM summary_steps WHERE job_id=? AND round_number=? AND output_text IS NULL ORDER BY step_number LIMIT 1",id,round);
             if(steps.isEmpty()) { finishRound(job); return; }
             var step=steps.getFirst();
-            String mode=((Number)job.get("pipeline_version")).intValue()>=4?"direct_"+job.get("compression_level"):"fragment";
+            String mode=((Number)job.get("pipeline_version")).intValue()>=4
+                    ?"direct_"+(job.get("incremental_base_id")!=null?"incremental_":"")+job.get("compression_level"):"fragment";
             if(((Number)job.get("pipeline_version")).intValue()<4 && ((Number)step.get("section_number")).intValue()==-1 && jdbc.queryForObject("SELECT count(*) FROM summary_steps WHERE job_id=? AND round_number=?",Integer.class,id,round)==1) mode="overview_"+job.get("compression_level");
             String repair=(String)step.get("repair_text");
             try {
@@ -233,7 +262,8 @@ public class SummaryQueue {
         if(rows.isEmpty() || rows.stream().anyMatch(row->row.get("output_text")==null)) return;
         if(rows.size()==1 && ((Number)rows.getFirst().get("section_number")).intValue()==-1) {
             UUID result=UUID.randomUUID();String level=(String)job.get("compression_level");
-            jdbc.update("INSERT INTO summaries(id,document_id,summary_text,compression_level,compression_percent,algorithm,model_name) VALUES (?,?,?,?,?,'deepseek-long-context-v1',?)",result,job.get("document_id"),rows.getFirst().get("output_text"),level,switch(level){case "short"->20;case "detailed"->50;default->35;},job.get("model_name"));
+            jdbc.update("INSERT INTO summaries(id,document_id,summary_text,compression_level,compression_percent,algorithm,model_name) VALUES (?,?,?,?,?,?,?)",result,job.get("document_id"),rows.getFirst().get("output_text"),level,switch(level){case "short"->20;case "detailed"->50;default->35;},
+                    job.get("incremental_base_id")!=null?"deepseek-incremental-v1":"deepseek-long-context-v1",job.get("model_name"));
             jdbc.update("UPDATE summary_jobs SET status='ready',result_id=?,error_message=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",result,id);
             return;
         }

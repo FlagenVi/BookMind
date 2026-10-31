@@ -22,6 +22,10 @@ interface SummaryState {
   nextAttemptAt?: string
   readBoundary?: number
   readPercent?: number
+  baseBoundary?: number | null
+  basePercent?: number
+  inputCharacters?: number | null
+  sourceCharacters?: number | null
 }
 export function SummaryPanel({
   id,
@@ -323,6 +327,20 @@ export function SummaryPanel({
           </p>
         </>
       )}
+      {state?.baseBoundary != null &&
+        !!state.inputCharacters &&
+        !!state.sourceCharacters && (
+          <p className="mt-3 text-xs text-muted">
+            Изложение дополнено на основе прежнего пересказа до ≈
+            {state.basePercent ?? 0}% книги: в модель отправлено{' '}
+            {state.inputCharacters.toLocaleString('ru-RU')} символов вместо{' '}
+            {state.sourceCharacters.toLocaleString('ru-RU')} (в{' '}
+            {(state.sourceCharacters / state.inputCharacters).toLocaleString('ru-RU', {
+              maximumFractionDigits: 1,
+            })}{' '}
+            раза меньше).
+          </p>
+        )}
       {!!state?.tokensUsed && (
         <p className="mt-3 text-xs text-muted">
           Учтено токенов в ответах API:{' '}

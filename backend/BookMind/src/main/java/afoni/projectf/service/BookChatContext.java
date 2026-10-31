@@ -13,7 +13,29 @@ public final class BookChatContext {
     public record Section(int number,String title,int start,int end) {}
     public record Reference(int sectionNumber,String title,int startOffset,int endOffset) {}
     public record Selection(String text,List<Reference> references,int positionOffset) {}
-    private record Candidate(Reference reference,String text,int score) {}
+    private record Candidate(Reference reference,String text,double score) {}
+    private record Window(Reference reference,String text,Map<String,Integer> counts) {}
+    // Longest first. A light stemmer is enough to match "письмо", "письма" and "письмом" for retrieval.
+    private static final List<String> ENDINGS=Arrays.stream(new String[]{
+            "иями","ями","ами","ого","его","ому","ему","ыми","ими","ией","ться","тся","ешь","ете","ите","ала","ило","или",
+            "ий","ый","ой","ая","яя","ое","ее","ые","ие","ых","их","ом","ем","ам","ям","ах","ях","ую","юю","ов","ев","ей",
+            "ия","ию","ью","ет","ют","ут","ит","ат","ят","ла","ли","ло","ть",
+            "ing","ed","es",
+            "а","я","о","е","ы","и","у","ю","ь","й","л","s"})
+            .sorted(Comparator.comparingInt(String::length).reversed()).toList();
+    // Question words that say nothing about where the answer is.
+    private static final Set<String> STOP_WORDS=Set.of("почему","зачем","когда","какой","какая","какие","каким","какое","который",
+            "которая","которые","этот","этом","этой","этого","того","тому","такой","также","было","были","была","будет","есть",
+            "чтобы","книге","книги","книга","книгу","главе","главы","глава","расскажи","объясни","произошло","происходит",
+            "what","which","when","where","there","this","that","with","does","about","book","chapter","happened");
+    private static final Set<String> STOP_STEMS=STOP_WORDS.stream().map(BookChatContext::stem).collect(java.util.stream.Collectors.toSet());
+
+    static String stem(String word) {
+        String value=word.toLowerCase(Locale.ROOT).replace('ё','е');
+        for(String ending:ENDINGS)
+            if(value.endsWith(ending) && value.length()-ending.length()>=3) return value.substring(0,value.length()-ending.length());
+        return value;
+    }
 
     private BookChatContext() {}
 
@@ -44,34 +66,51 @@ public final class BookChatContext {
         int boundary=Math.max(0,Math.min(book.length(),confirmedOffset));
         if(boundary==0) return new Selection("",List.of(),0);
         Set<String> terms=new LinkedHashSet<>();
-        var matcher=WORD.matcher(question.toLowerCase(Locale.ROOT));
-        while(matcher.find()) terms.add(matcher.group());
+        var matcher=WORD.matcher(question);
+        while(matcher.find()) {
+            String term=stem(matcher.group());
+            if(!STOP_STEMS.contains(term)) terms.add(term);
+        }
         List<Section> available=sections.isEmpty()?List.of(new Section(0,"Текст книги",0,boundary)):sections;
-        var candidates=new ArrayList<Candidate>();
+        var windows=new ArrayList<Window>();
+        var documentFrequency=new HashMap<String,Integer>();
         for(var section:available) {
             int start=Math.max(0,Math.min(boundary,section.start()));
             int end=Math.max(start,Math.min(boundary,section.end()));
             for(int from=start;from<end;from+=STEP) {
                 int to=Math.min(end,from+WINDOW);
                 String excerpt=book.substring(from,to);
-                String searchable=(section.title()+" "+excerpt).toLowerCase(Locale.ROOT);
-                int score=0;
-                for(String term:terms) {
-                    int at=0;
-                    while((at=searchable.indexOf(term,at))>=0) {score++;at+=term.length();}
+                var counts=new HashMap<String,Integer>();
+                var words=WORD.matcher(section.title()+" "+excerpt);
+                while(words.find()) {
+                    String word=stem(words.group());
+                    if(terms.contains(word)) counts.merge(word,1,Integer::sum);
                 }
-                candidates.add(new Candidate(new Reference(section.number(),section.title(),from,to),excerpt,score));
+                counts.keySet().forEach(term->documentFrequency.merge(term,1,Integer::sum));
+                windows.add(new Window(new Reference(section.number(),section.title(),from,to),excerpt,counts));
             }
         }
-        if(candidates.isEmpty()) return new Selection("",List.of(),boundary);
+        if(windows.isEmpty()) return new Selection("",List.of(),boundary);
+        // BM25-style weighting: a rare name outweighs a word repeated on every page,
+        // and many repeats of one word in a window count less than several different words.
+        var candidates=new ArrayList<Candidate>();
+        for(var window:windows) {
+            double score=0;
+            for(var entry:window.counts().entrySet()) {
+                int frequency=documentFrequency.get(entry.getKey());
+                double rarity=Math.log(1+(windows.size()-frequency+0.5)/(frequency+0.5));
+                score+=rarity*entry.getValue()*2.2/(entry.getValue()+1.2);
+            }
+            candidates.add(new Candidate(window.reference(),window.text(),score));
+        }
         var chosen=new ArrayList<Candidate>();
         if(candidates.stream().anyMatch(candidate->candidate.score()>0)) {
             Candidate latest=candidates.getLast();
-            chosen.addAll(candidates.stream().sorted(Comparator.comparingInt(Candidate::score).reversed()
+            chosen.addAll(candidates.stream().sorted(Comparator.comparingDouble(Candidate::score).reversed()
                     .thenComparingInt(candidate->candidate.reference().startOffset())).limit(MAX_WINDOWS-1).toList());
             if(!chosen.contains(latest)) chosen.add(latest);
             else candidates.stream().filter(candidate->!chosen.contains(candidate))
-                    .max(Comparator.comparingInt(Candidate::score)).ifPresent(chosen::add);
+                    .max(Comparator.comparingDouble(Candidate::score)).ifPresent(chosen::add);
         } else {
             int count=Math.min(MAX_WINDOWS,candidates.size());
             for(int i=0;i<count;i++) {

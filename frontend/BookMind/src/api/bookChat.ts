@@ -35,6 +35,7 @@ export interface BookChatTurn {
   references: BookChatReference[]
   promptTokens: number
   completionTokens: number
+  usedSummary?: boolean
   createdAt: string
 }
 

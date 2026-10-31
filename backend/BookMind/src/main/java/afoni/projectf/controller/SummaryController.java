@@ -73,7 +73,7 @@ public class SummaryController {
         owned(auth,id);
         if(scope.equals("read")) sectionNumber=readBoundary(auth,id);
         int revision=jdbc.queryForObject("SELECT novel_revision FROM documents WHERE id=?",Integer.class,id);
-        var jobs=jdbc.queryForList("SELECT j.id,j.status,j.pipeline_version AS \"pipelineVersion\",j.round_number AS \"round\",j.tokens_used AS \"tokensUsed\",j.error_message AS \"errorMessage\",j.next_attempt_at AS \"nextAttemptAt\",s.summary_text AS \"text\",(SELECT count(*) FROM summary_steps p WHERE p.job_id=j.id AND p.round_number=j.round_number) AS \"totalSteps\",(SELECT count(*) FROM summary_steps p WHERE p.job_id=j.id AND p.round_number=j.round_number AND p.output_text IS NOT NULL) AS \"doneSteps\" FROM summary_jobs j LEFT JOIN summaries s ON s.id=j.result_id WHERE j.document_id=? AND j.compression_level=? AND j.scope_mode=? AND j.scope_section_number=?",id,level,scope,sectionNumber);
+        var jobs=jdbc.queryForList("SELECT j.id,j.status,j.pipeline_version AS \"pipelineVersion\",j.round_number AS \"round\",j.tokens_used AS \"tokensUsed\",j.error_message AS \"errorMessage\",j.next_attempt_at AS \"nextAttemptAt\",s.summary_text AS \"text\",j.input_characters AS \"inputCharacters\",j.source_characters AS \"sourceCharacters\",(SELECT b.scope_section_number FROM summary_jobs b WHERE b.result_id=j.incremental_base_id LIMIT 1) AS \"baseBoundary\",(SELECT count(*) FROM summary_steps p WHERE p.job_id=j.id AND p.round_number=j.round_number) AS \"totalSteps\",(SELECT count(*) FROM summary_steps p WHERE p.job_id=j.id AND p.round_number=j.round_number AND p.output_text IS NOT NULL) AS \"doneSteps\" FROM summary_jobs j LEFT JOIN summaries s ON s.id=j.result_id WHERE j.document_id=? AND j.compression_level=? AND j.scope_mode=? AND j.scope_section_number=?",id,level,scope,sectionNumber);
         if(!jobs.isEmpty()) {
             int savedRevision=jdbc.queryForObject("SELECT source_revision FROM summary_jobs WHERE id=?",Integer.class,jobs.getFirst().get("id"));
             if(savedRevision!=revision) return new HashMap<>(Map.of("status","stale","configured",settings.configured()));
@@ -84,6 +84,8 @@ public class SummaryController {
             result.put("readBoundary",sectionNumber);
             int length=jdbc.queryForObject("SELECT char_length(original_text) FROM documents WHERE id=?",Integer.class,id);
             result.put("readPercent",length==0?0:Math.min(100,(int)Math.round(sectionNumber*100.0/length)));
+            if(result.get("baseBoundary") instanceof Number base)
+                result.put("basePercent",length==0?0:Math.min(100,(int)Math.round(base.intValue()*100.0/length)));
         }
         var activeJobs=jdbc.queryForList("SELECT compression_level AS level,scope_mode AS scope,scope_section_number AS \"sectionNumber\",status FROM summary_jobs WHERE document_id=? AND status IN ('queued','running','waiting') ORDER BY created_at LIMIT 1",id);
         if(!activeJobs.isEmpty()) result.put("activeJob",activeJobs.getFirst());

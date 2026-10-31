@@ -138,6 +138,43 @@ class ProjectFApplicationTests {
         jdbc.update("DELETE FROM documents WHERE id=?",anotherBook);
     }
 
+    @Test void bookChatUsesOnlyASummaryWithinTheSavedPosition() throws Exception {
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
+        String email=UUID.randomUUID()+"@example.test";
+        var owner=registerAccount(email,UUID.randomUUID().toString());
+        UUID user=jdbc.queryForObject("SELECT id FROM users WHERE email=?",UUID.class,email);
+        UUID book=UUID.randomUUID();
+        String text="Марфа пишет письмо герою. ".repeat(100)+"Развязка.";
+        int confirmed=text.indexOf("Развязка");
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type) VALUES (?,?,?,?,'epub','BOOK')",book,user,"Книга",text);
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset) VALUES (?,?,?,?)",user,book,confirmed,confirmed);
+        String summary="INSERT INTO summaries(id,document_id,summary_text,compression_level,compression_percent,algorithm) VALUES (?,?,?,'medium',35,'test')";
+        String job="INSERT INTO summary_jobs(id,document_id,compression_level,model_name,status,result_id,scope_mode,scope_section_number,pipeline_version) VALUES (?,?,?,'test','ready',?,'read',?,4)";
+        UUID allowed=UUID.randomUUID(),later=UUID.randomUUID();
+        jdbc.update(summary,allowed,book,"РАЗРЕШЁННОЕ_ИЗЛОЖЕНИЕ: Марфа переписывается с героем.");
+        jdbc.update(job,UUID.randomUUID(),book,"medium",allowed,confirmed/2);
+        jdbc.update(summary,later,book,"СПОЙЛЕР_ИЗЛОЖЕНИЯ");
+        jdbc.update(job,UUID.randomUUID(),book,"detailed",later,text.length());
+        var sent=new java.util.concurrent.atomic.AtomicReference<String>();
+        org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("deepseek-flash")))
+                .thenAnswer(invocation->{
+                    java.util.List<afoni.projectf.service.BookChatClient.Message> messages=invocation.getArgument(0);
+                    sent.set(messages.stream().map(afoni.projectf.service.BookChatClient.Message::content).reduce("",String::concat));
+                    return new afoni.projectf.service.BookChatClient.Result("Марфа пишет письма [1].",100,20);
+                });
+        String path="/api/books/"+book+"/chats";
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isCreated());
+        UUID thread=jdbc.queryForObject("SELECT id FROM book_chat_threads WHERE document_id=?",UUID.class,book);
+        mvc.perform(post(path+"/"+thread+"/turns").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\""+UUID.randomUUID()+"\",\"mode\":\"grounded\",\"question\":\"Кому пишет Марфа?\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ready")).andExpect(jsonPath("$.usedSummary").value(true));
+        assertTrue(sent.get().contains("РАЗРЕШЁННОЕ_ИЗЛОЖЕНИЕ"));
+        assertFalse(sent.get().contains("СПОЙЛЕР_ИЗЛОЖЕНИЯ"));
+        assertFalse(sent.get().contains("Развязка"));
+        jdbc.update("DELETE FROM documents WHERE id=?",book);
+    }
+
     @Test
     void summaryQueueRetriesAndReducesWithoutRepeatingCompletedSteps() throws Exception {
         org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
@@ -236,6 +273,28 @@ class ProjectFApplicationTests {
         mvc.perform(get(path+"?scope=read").session(owner)).andExpect(jsonPath("$.status").value("not_started"));
         mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(read)).andExpect(status().isNoContent());
         assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM summary_jobs WHERE document_id=? AND scope_mode='read'",Integer.class,book));
+        // The new summary extends the earlier one with only the text read since then.
+        var update=new StringBuilder();var modes=new java.util.ArrayList<String>();
+        afoni.projectf.service.Summarizer incremental=(input,level,model)-> {
+            update.append(input);modes.add(level);
+            return new afoni.projectf.service.Summarizer.Result("Герой нашёл письмо, открыл конверт и узнал финал.",30);
+        };
+        for(int i=0;i<40 && !"ready".equals(jdbc.queryForObject("SELECT status FROM summary_jobs WHERE document_id=? AND scope_mode='read' AND scope_section_number=?",String.class,book,text.length()));i++) {
+            jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+            new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,incremental,llmSettings).tick();
+        }
+        assertTrue(modes.contains("direct_incremental_medium"));
+        assertTrue(update.toString().contains("Герой нашёл письмо и открыл конверт."));
+        assertTrue(update.toString().contains("СЕКРЕТНЫЙ_ФИНАЛ"));
+        assertTrue(update.toString().contains("Глава 2 (продолжение)"));
+        assertFalse(update.toString().contains("находит письмо"));
+        assertFalse(update.toString().contains("ПРИМЕЧАНИЕ_В_КОНЦЕ"));
+        var incrementalResult=mvc.perform(get(path+"?scope=read").session(owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ready")).andExpect(jsonPath("$.text").value("Герой нашёл письмо, открыл конверт и узнал финал."))
+                .andExpect(jsonPath("$.baseBoundary").value(boundary)).andReturn().getResponse().getContentAsString();
+        int inputCharacters=JsonPath.read(incrementalResult,"$.inputCharacters"),sourceCharacters=JsonPath.read(incrementalResult,"$.sourceCharacters");
+        assertTrue(inputCharacters<sourceCharacters);
+        assertEquals("deepseek-incremental-v1",jdbc.queryForObject("SELECT s.algorithm FROM summaries s JOIN summary_jobs j ON j.result_id=s.id WHERE j.document_id=? AND j.scope_section_number=?",String.class,book,text.length()));
         jdbc.update("DELETE FROM documents WHERE id=?",book);
     }
 
@@ -1528,7 +1587,7 @@ class ProjectFApplicationTests {
 
     @Test
     void migrationsAreAppliedOnceAndLongNotesRoundTrip() {
-        assertEquals(34, flyway.info().applied().length);
+        assertEquals(36, flyway.info().applied().length);
         assertEquals(0, flyway.migrate().migrationsExecuted);
         Note note = new Note();
         note.setTitle("Migration test");
@@ -1580,7 +1639,7 @@ class ProjectFApplicationTests {
                 .locations("classpath:db/migration").baselineVersion("0").load();
         // Explicit adoption is tested; normal startup never baselines automatically.
         legacy.baseline();
-        assertEquals(34, legacy.migrate().migrationsExecuted);
+        assertEquals(36, legacy.migrate().migrationsExecuted);
         assertEquals("Keep this record", jdbc.queryForObject("SELECT content FROM legacy_test.note WHERE id = 1", String.class));
         assertEquals("text", jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_test' AND table_name = 'note' AND column_name = 'content'", String.class));
     }

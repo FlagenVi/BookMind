@@ -190,7 +190,7 @@ export function BookChatPanel({
                     {turn.answer && <FormattedAnswer text={turn.answer} />}
                     <p className="mt-2 text-xs text-muted">
                       {turn.mode === 'grounded'
-                        ? `По книге · до позиции ${turn.positionOffset?.toLocaleString('ru-RU') ?? '—'}`
+                        ? `По книге · до позиции ${turn.positionOffset?.toLocaleString('ru-RU') ?? '—'}${turn.usedSummary ? ' · с учётом изложения прочитанного' : ''}`
                         : 'По знаниям модели · не проверено по файлу'}
                     </p>
                     {!!turn.references?.length && (
