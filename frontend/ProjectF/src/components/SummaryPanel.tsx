@@ -20,6 +20,8 @@ interface SummaryState {
   partialText?: string
   errorMessage?: string
   nextAttemptAt?: string
+  readBoundary?: number
+  readPercent?: number
 }
 export function SummaryPanel({
   id,
@@ -50,11 +52,12 @@ export function SummaryPanel({
     }
   }, [id, level])
   const [copyMessage, setCopyMessage] = useState('')
-  const [scope, setScope] = useState('whole')
+  // Inside the reader the spoiler-free summary is the default; the server sets its boundary.
+  const [scope, setScope] = useState(chapters ? 'read' : 'whole')
   const mainChapters = chapters?.filter((chapter) => chapter.role === 'main') ?? []
   const [sectionNumber, setSectionNumber] = useState(mainChapters[0]?.number ?? -1)
   const client = useQueryClient()
-  const selectedSection = scope === 'whole' ? -1 : sectionNumber
+  const selectedSection = scope === 'whole' || scope === 'read' ? -1 : sectionNumber
   const queryKey = ['documents', 'summary', id, level, scope, selectedSection]
   const query = new URLSearchParams({ level, scope, sectionNumber: String(selectedSection) })
   const summary = useQuery({
@@ -84,6 +87,16 @@ export function SummaryPanel({
   const failedNew = state?.status === 'failed' && (state.pipelineVersion ?? 0) >= 4
   const truncated = failedNew && state.errorMessage?.startsWith('Модель исчерпала бюджет ответа')
   const repairAvailable = failedNew && !!state.partialText && !truncated
+  const noProgress = scope === 'read' && state?.readBoundary === 0
+  const activeJob = state?.activeJob
+  const activeElsewhere =
+    !!activeJob &&
+    (activeJob.level !== level ||
+      activeJob.scope !== scope ||
+      activeJob.sectionNumber !==
+        (scope === 'read' ? state?.readBoundary : selectedSection))
+  const activeForEarlierPosition =
+    activeElsewhere && activeJob.scope === 'read' && scope === 'read'
   return (
     <section className="mt-6 rounded-xl border border-accent-line bg-surface p-5">
       <h2 className="text-lg font-semibold">Изложение материала</h2>
@@ -91,7 +104,7 @@ export function SummaryPanel({
         Выбранный текст отправляется в DeepSeek целиком. Если он слишком большой,
         главы объединяются в несколько томов. Результат сохраняется автоматически.
       </p>
-      {mainChapters.length > 0 && (
+      {chapters && (
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="block text-sm font-medium">
             Объём текста
@@ -101,12 +114,17 @@ export function SummaryPanel({
               disabled={start.isPending}
               onChange={(event) => { setScope(event.target.value); start.reset() }}
             >
-              <option value="whole">Вся книга</option>
-              <option value="through_chapter">До выбранной главы включительно</option>
-              <option value="chapter">Только одна глава</option>
+              <option value="read">Только прочитанное</option>
+              <option value="whole">Вся книга (со спойлерами)</option>
+              {mainChapters.length > 0 && (
+                <>
+                  <option value="through_chapter">До выбранной главы включительно</option>
+                  <option value="chapter">Только одна глава</option>
+                </>
+              )}
             </NativeSelect>
           </label>
-          {scope !== 'whole' && (
+          {(scope === 'chapter' || scope === 'through_chapter') && (
             <label className="block text-sm font-medium">
               Глава
               <NativeSelect
@@ -120,6 +138,13 @@ export function SummaryPanel({
             </label>
           )}
         </div>
+      )}
+      {scope === 'read' && state?.readBoundary !== undefined && (
+        <p className="mt-3 text-sm text-muted">
+          {noProgress
+            ? 'Позиция чтения ещё не сохранена. Начните читать, и изложение охватит только прочитанное.'
+            : `В запрос попадёт только текст до сохранённой позиции чтения (≈${state.readPercent ?? 0}% книги). Следующие главы и непрочитанная часть текущей не отправляются.`}
+        </p>
       )}
       <label htmlFor="summary-level" className="mt-4 block text-sm font-medium">
         Подробность общего обзора
@@ -141,15 +166,17 @@ export function SummaryPanel({
           <option value="medium">Средне</option>
           <option value="detailed">Подробно</option>
         </NativeSelect>
-        {state && ['not_started', 'failed'].includes(state.status) && (
+        {state && ['not_started', 'failed', 'stale'].includes(state.status) && (
           <Button
             className="min-h-12 w-full sm:w-auto"
-            disabled={!state.configured || start.isPending || !!state.activeJob}
+            disabled={!state.configured || start.isPending || !!state.activeJob || noProgress}
             onClick={() => start.mutate()}
           >
             {start.isPending
               ? 'Постановка в очередь…'
-              : state.status === 'failed'
+              : state.status === 'stale'
+                ? 'Обновить изложение'
+                : state.status === 'failed'
                 ? state.pipelineVersion && state.pipelineVersion < 4
                   ? 'Создать заново одним запросом'
                   : repairAvailable
@@ -179,25 +206,35 @@ export function SummaryPanel({
           На сервере ещё не настроено подключение к DeepSeek.
         </p>
       )}
-      {state?.activeJob && (state.activeJob.level !== level || state.activeJob.scope !== scope || state.activeJob.sectionNumber !== selectedSection) && (
+      {activeElsewhere && (
         <div
           role="status"
           className="mt-4 rounded-xl bg-accent-soft p-4 text-sm text-accent"
         >
-          Документ уже обрабатывается. Повторный запуск недоступен.
-          <Button
-            className="mt-3"
-            variant="outline"
-            onClick={() => {
-              setLevel(state.activeJob!.level)
-              setScope(state.activeJob!.scope)
-              setSectionNumber(state.activeJob!.sectionNumber)
-              start.reset()
-            }}
-          >
-            Открыть текущую обработку
-          </Button>
+          {activeForEarlierPosition
+            ? 'Изложение для прежней позиции чтения ещё формируется. Новый запуск станет доступен после его завершения.'
+            : 'Документ уже обрабатывается. Повторный запуск недоступен.'}
+          {!activeForEarlierPosition && (
+            <Button
+              className="mt-3"
+              variant="outline"
+              onClick={() => {
+                setLevel(activeJob.level)
+                setScope(activeJob.scope)
+                if (activeJob.scope !== 'read') setSectionNumber(activeJob.sectionNumber)
+                start.reset()
+              }}
+            >
+              Открыть текущую обработку
+            </Button>
+          )}
         </div>
+      )}
+      {state?.status === 'stale' && (
+        <p role="status" className="mt-3 text-sm text-warning">
+          Главы новеллы изменились. Прежнее изложение относится к старой версии текста.
+          Обновление отправит новый платный запрос в DeepSeek только после нажатия кнопки.
+        </p>
       )}
       {active && (
         <p role="status" className="mt-4 text-sm text-accent">

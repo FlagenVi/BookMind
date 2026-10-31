@@ -22,6 +22,18 @@ public class UserAccount {
     private String displayName;
     @Column(length = 500)
     private String bio;
+    @Column(length = 24)
+    private String username;
+    @Column(nullable = false, length = 12)
+    private String profileVisibility = "private";
+    @Column(nullable = false)
+    private boolean showLibrary;
+    @Column(nullable = false)
+    private boolean showStatistics;
+    @Column(nullable = false)
+    private boolean showActivity;
+    @Column(nullable = false)
+    private boolean showFriends;
     @Column(columnDefinition = "bytea")
     private byte[] avatarData;
     @Column(length = 40)

@@ -188,6 +188,58 @@ class ProjectFApplicationTests {
     }
 
     @Test
+    void readSummaryNeverSendsTextBeyondSavedPosition() throws Exception {
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("deepseek-flash");
+        String email=UUID.randomUUID()+"@example.test";
+        var owner=registerAccount(email,UUID.randomUUID().toString());
+        UUID user=jdbc.queryForObject("SELECT id FROM users WHERE email=?",UUID.class,email);
+        UUID book=UUID.randomUUID();
+        String first="Глава 1\n"+"Герой находит письмо. ".repeat(30);
+        String second="Глава 2\n"+"Герой открывает конверт. ".repeat(10)+"СЕКРЕТНЫЙ_ФИНАЛ. "+"Развязка. ".repeat(10);
+        String notes="Примечания\nПРИМЕЧАНИЕ_В_КОНЦЕ";
+        String text=first+second+notes;
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type) VALUES (?,?,?,?,'epub','BOOK')",book,user,"Книга",text);
+        String sections="INSERT INTO reader_sections(document_id,section_number,title,role,start_offset,end_offset,content) VALUES (?,?,?,?,?,?,?)";
+        jdbc.update(sections,book,0,"Глава 1","main",0,first.length(),first);
+        jdbc.update(sections,book,1,"Глава 2","main",first.length(),first.length()+second.length(),second);
+        jdbc.update(sections,book,2,"Примечания","auxiliary",first.length()+second.length(),text.length(),notes);
+        String path="/api/documents/"+book+"/summary";
+        String read="{\"level\":\"medium\",\"scope\":\"read\"}";
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(read)).andExpect(status().isBadRequest());
+        mvc.perform(get(path+"?scope=read").session(owner)).andExpect(status().isOk()).andExpect(jsonPath("$.readBoundary").value(0));
+        int boundary=text.indexOf("СЕКРЕТНЫЙ_ФИНАЛ");
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset) VALUES (?,?,?,?)",user,book,boundary,boundary);
+        // The client cannot choose its own boundary.
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"level\":\"medium\",\"scope\":\"read\",\"sectionNumber\":"+text.length()+"}")).andExpect(status().isBadRequest());
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(read)).andExpect(status().isNoContent());
+        assertEquals(boundary,jdbc.queryForObject("SELECT scope_section_number FROM summary_jobs WHERE document_id=? AND scope_mode='read'",Integer.class,book));
+        var sent=new StringBuilder();
+        afoni.projectf.service.Summarizer fake=(input,level,model)-> {
+            sent.append(input);
+            return new afoni.projectf.service.Summarizer.Result("Герой нашёл письмо и открыл конверт.",40);
+        };
+        for(int i=0;i<40 && !"ready".equals(jdbc.queryForObject("SELECT status FROM summary_jobs WHERE document_id=? AND scope_mode='read'",String.class,book));i++) {
+            jdbc.update("UPDATE llm_throttle SET next_call_at=CURRENT_TIMESTAMP");
+            new afoni.projectf.service.SummaryQueue(jdbc,transactionManager,fake,llmSettings).tick();
+        }
+        assertTrue(sent.toString().contains("находит письмо"));
+        assertTrue(sent.toString().contains("открывает конверт"));
+        assertFalse(sent.toString().contains("СЕКРЕТНЫЙ_ФИНАЛ"));
+        assertFalse(sent.toString().contains("Развязка"));
+        assertFalse(sent.toString().contains("ПРИМЕЧАНИЕ_В_КОНЦЕ"));
+        mvc.perform(get(path+"?scope=read").session(owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ready")).andExpect(jsonPath("$.readBoundary").value(boundary));
+        // Reading further starts a new summary and keeps the earlier one in history.
+        jdbc.update("UPDATE reading_progress SET confirmed_offset=? WHERE user_id=? AND document_id=?",text.length(),user,book);
+        mvc.perform(get(path+"?scope=read").session(owner)).andExpect(jsonPath("$.status").value("not_started"));
+        mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(read)).andExpect(status().isNoContent());
+        assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM summary_jobs WHERE document_id=? AND scope_mode='read'",Integer.class,book));
+        jdbc.update("DELETE FROM documents WHERE id=?",book);
+    }
+
+    @Test
     void txtUploadCheckpointsResumeAndPreservesText() throws Exception {
         String email=UUID.randomUUID()+"@example.test";
         var session=registerAccount(email,UUID.randomUUID().toString());
@@ -433,6 +485,7 @@ class ProjectFApplicationTests {
     void materialTypesSeparateListsAndContextsFreezeTheirSourceRange() throws Exception {
         String email=UUID.randomUUID()+"@example.test";
         var session=registerAccount(email,UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
         String content="Глава первая\n"+"Прочитанный текст. ".repeat(20)+"\nГлава вторая\nНепрочитанный текст.";
         String json=new tools.jackson.databind.ObjectMapper().writeValueAsString(java.util.Map.of("title","Документ","content",content));
         var created=mvc.perform(post("/api/documents").session(session).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(json))
@@ -445,6 +498,10 @@ class ProjectFApplicationTests {
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.content").value(content))
                 .andExpect(jsonPath("$.materialType").value("DOCUMENT")).andReturn();
         String contextId=JsonPath.read(snapshot.getResponse().getContentAsString(),"$.id");
+        mvc.perform(get("/api/materials/"+id+"/contexts").session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/materials/"+id+"/contexts/"+contextId).session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(delete("/api/materials/"+id+"/contexts/"+contextId).session(stranger).with(csrf()))
+                .andExpect(status().isNotFound());
         jdbc.update("UPDATE documents SET original_text='Изменённый текст' WHERE id=?",id);
         mvc.perform(get("/api/materials/"+id+"/contexts/"+contextId).session(session))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.content").value(content));
@@ -752,6 +809,9 @@ class ProjectFApplicationTests {
                 .andExpect(jsonPath("$.preparationStatus").value("not_started"));
         mvc.perform(get("/api/books/"+second+"/cover").session(session)).andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.IMAGE_PNG)).andExpect(content().bytes(png));
+        mvc.perform(get("/api/books/"+second+"/cover").session(other)).andExpect(status().isNotFound());
+        UUID coverId=jdbc.queryForObject("SELECT id FROM book_assets WHERE document_id=? AND is_cover",UUID.class,second);
+        mvc.perform(get("/api/books/"+second+"/assets/"+coverId).session(other)).andExpect(status().isNotFound());
         var invalid=new org.springframework.mock.web.MockMultipartFile("file","cover.png","image/png",new byte[]{1,2,3});
         mvc.perform(multipart("/api/books/"+second+"/cover").file(invalid).session(session).with(csrf())
                         .with(request->{request.setMethod("PUT");return request;}))
@@ -879,6 +939,7 @@ class ProjectFApplicationTests {
     @Test
     void resumableUploadCompletesIdempotentlyThroughBackgroundImport() throws Exception {
         var session=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
         byte[] bytes="Первая глава\n\nТекст книги".getBytes(StandardCharsets.UTF_8);
         String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
         var started=mvc.perform(post("/api/book-uploads").session(session).with(csrf())
@@ -886,6 +947,10 @@ class ProjectFApplicationTests {
                         .content("{\"filename\":\"book.txt\",\"title\":\"book\",\"size\":"+bytes.length+",\"materialType\":\"BOOK\"}"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.status").value("uploading")).andReturn();
         String uploadId=JsonPath.read(started.getResponse().getContentAsString(),"$.id");
+        mvc.perform(get("/api/book-uploads/"+uploadId).session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(patch("/api/book-uploads/"+uploadId).session(stranger).with(csrf())
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM).header("Upload-Offset",0).content(bytes))
+                .andExpect(status().isNotFound());
         mvc.perform(patch("/api/book-uploads/"+uploadId).session(session).with(csrf())
                         .contentType(MediaType.APPLICATION_OCTET_STREAM).header("Upload-Offset",0).content(bytes))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.confirmedOffset").value(bytes.length));
@@ -935,6 +1000,263 @@ class ProjectFApplicationTests {
                 .andExpect(status().isAccepted()).andExpect(jsonPath("$.status").value("queued"));
         assertEquals(bytes.length,jdbc.queryForObject("SELECT octet_length(uploaded_bytes) FROM book_upload_sessions WHERE id=?",Integer.class,UUID.fromString(uploadId)));
         jdbc.update("DELETE FROM book_upload_sessions WHERE id=?",UUID.fromString(uploadId));
+    }
+
+    @Test
+    void publicProfileRespectsSectionVisibilityFriendshipAndBlocks() throws Exception {
+        var alice=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var bob=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        mvc.perform(put("/api/auth/profile").session(alice).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Алиса\",\"bio\":\"Люблю книги\",\"username\":\"alice_reader\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.visibility").value("private"));
+        mvc.perform(get("/api/profiles/alice_reader").session(bob)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/profiles/search").param("q","alice_"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
+        UUID aliceId=jdbc.queryForObject("SELECT id FROM users WHERE username='alice_reader'",UUID.class);
+        UUID selectedBook=UUID.randomUUID(), hiddenBook=UUID.randomUUID();
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type,author) VALUES (?,?,?,?,'epub','BOOK',?)",
+                selectedBook,aliceId,"Выбранная книга","Личный текст книги", "Автор");
+        jdbc.update("INSERT INTO documents(id,user_id,title,original_text,source_type,material_type) VALUES (?,?,?,?,'epub','BOOK')",
+                hiddenBook,aliceId,"Скрытая книга","Ещё один личный текст");
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset) VALUES (?,?,?,?)",
+                aliceId,selectedBook,17,17);
+        mvc.perform(put("/api/auth/profile").session(alice).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Алиса\",\"bio\":\"Люблю книги\",\"visibility\":\"public\",\"favoriteGenres\":[\"Фантастика\"],\"featuredBookIds\":[\""+selectedBook+"\"]}"))
+                .andExpect(status().isOk());
+        var publicResponse=mvc.perform(get("/api/profiles/alice_reader"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.displayName").value("Алиса"))
+                .andExpect(jsonPath("$.statistics").isEmpty()).andExpect(jsonPath("$.featuredBooks[0].title").value("Выбранная книга"))
+                .andExpect(jsonPath("$.favoriteGenres[0]").value("Фантастика"))
+                .andExpect(jsonPath("$.email").doesNotExist()).andExpect(jsonPath("$.positionOffset").doesNotExist())
+                .andExpect(jsonPath("$.notes").doesNotExist()).andReturn();
+        assertFalse(publicResponse.getResponse().getContentAsString().contains("Личный текст книги"));
+        assertFalse(publicResponse.getResponse().getContentAsString().contains("Скрытая книга"));
+        mvc.perform(get("/api/profiles/search").param("q","alice_"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].username").value("alice_reader"));
+        mvc.perform(get("/api/profiles/alice_reader/books").session(bob)).andExpect(status().isNotFound());
+        mvc.perform(put("/api/auth/profile").session(bob).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Боб\",\"bio\":\"\",\"username\":\"bob_reader\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(put("/api/auth/profile").session(bob).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Боб\",\"bio\":\"\",\"username\":\"alice_reader\"}"))
+                .andExpect(status().isConflict());
+        mvc.perform(post("/api/friends/alice_reader/request").session(bob).with(csrf())).andExpect(status().isCreated());
+        mvc.perform(post("/api/friends/bob_reader/accept").session(stranger).with(csrf())).andExpect(status().isNotFound());
+        mvc.perform(post("/api/friends/bob_reader/accept").session(alice).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(put("/api/auth/profile").session(alice).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"showFriends\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.displayName").value("Алиса"));
+        mvc.perform(get("/api/profiles/alice_reader").session(stranger))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.friends").isEmpty());
+        mvc.perform(get("/api/profiles/alice_reader").session(alice))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.friends[0].username").value("bob_reader"));
+        mvc.perform(put("/api/auth/profile").session(alice).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"displayName\":\"Алиса\",\"bio\":\"Люблю книги\",\"visibility\":\"friends\",\"showStatistics\":true}"))
+                .andExpect(status().isOk());
+        mvc.perform(get("/api/profiles/alice_reader").session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/profiles/alice_reader").session(bob)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.relationship").value("friends"))
+                .andExpect(jsonPath("$.statistics.readingMinutes").value(0))
+                .andExpect(jsonPath("$.activity").isEmpty());
+        mvc.perform(post("/api/blocks/bob_reader").session(alice).with(csrf())).andExpect(status().isNoContent());
+        mvc.perform(get("/api/profiles/alice_reader").session(bob)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/profiles/search").session(bob).param("q","alice_"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
+        mvc.perform(get("/api/friends").session(alice)).andExpect(jsonPath("$").isEmpty());
+        mvc.perform(delete("/api/blocks/bob_reader").session(alice).with(csrf())).andExpect(status().isNoContent());
+    }
+
+    @Test void novelBatchAcceptsOneHundredChapterFiles() throws Exception {
+        var owner=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var preview=multipart("/api/novels/preview");
+        var create=multipart("/api/novels");
+        var tooMany=multipart("/api/novels/preview");
+        var layout=new StringBuilder("{\"chapters\":[");
+        for(int index=0;index<100;index++) {
+            var file=new org.springframework.mock.web.MockMultipartFile("files",String.format("%03d.txt",index+1),"text/plain",
+                    ("Глава "+(index+1)+". Содержание.").getBytes(StandardCharsets.UTF_8));
+            preview.file(file);create.file(file);tooMany.file(file);
+            if(index>0) layout.append(',');
+            layout.append("{\"key\":\"").append(index).append(":0\",\"title\":\"Глава ").append(index+1).append("\"}");
+        }
+        layout.append("]}");
+        mvc.perform(preview.session(owner).with(csrf())).andExpect(status().isOk())
+                .andExpect(jsonPath("$.chapters.length()").value(100));
+        var created=mvc.perform(create
+                        .file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",layout.toString().getBytes(StandardCharsets.UTF_8)))
+                        .file(new org.springframework.mock.web.MockMultipartFile("title","","text/plain","Сто глав".getBytes(StandardCharsets.UTF_8)))
+                        .session(owner).with(csrf()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.chapters.length()").value(100)).andReturn();
+        UUID id=UUID.fromString(JsonPath.read(created.getResponse().getContentAsString(),"$.id"));
+        assertEquals(100,jdbc.queryForObject("SELECT count(*) FROM reader_sections WHERE document_id=?",Integer.class,id));
+        tooMany.file(new org.springframework.mock.web.MockMultipartFile("files","101.txt","text/plain","Ещё глава".getBytes(StandardCharsets.UTF_8)));
+        mvc.perform(tooMany.session(owner).with(csrf())).andExpect(status().isBadRequest());
+        jdbc.update("DELETE FROM documents WHERE id=?",id);
+    }
+
+    @Test void novelPreviewSplitsEpubVolumeIntoSpineOrderedChapters() throws Exception {
+        var owner=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var entries=afoni.projectf.service.BookTextExtractorTests.entries();
+        entries.put("OPS/book.opf",entries.get("OPS/book.opf").replace("</manifest>","<item id='image' href='images/picture.png' media-type='image/png'/></manifest>"));
+        entries.put("OPS/chapters/one chapter.xhtml","<html><body><h1>Первая</h1><p>Привет.</p><img src='../images/picture.png'/></body></html>");
+        entries.put("OPS/images/picture.png","sample-image");
+        var volume=new org.springframework.mock.web.MockMultipartFile("files","volume.epub","application/epub+zip",
+                afoni.projectf.service.BookTextExtractorTests.epub(entries));
+        mvc.perform(multipart("/api/novels/preview").file(volume).session(owner).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.chapters.length()").value(2))
+                .andExpect(jsonPath("$.chapters[0].title").value("Первая"))
+                .andExpect(jsonPath("$.chapters[1].title").value("Вторая"));
+        String layout="{\"chapters\":[{\"key\":\"0:0\",\"title\":\"Первая\"}]}";
+        var created=mvc.perform(multipart("/api/novels").file(volume)
+                        .file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",layout.getBytes(StandardCharsets.UTF_8)))
+                        .file(new org.springframework.mock.web.MockMultipartFile("title","","text/plain","Том".getBytes(StandardCharsets.UTF_8)))
+                        .session(owner).with(csrf()))
+                .andExpect(status().isCreated()).andReturn();
+        UUID id=UUID.fromString(JsonPath.read(created.getResponse().getContentAsString(),"$.id"));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM novel_chapters WHERE document_id=?",Integer.class,id));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM reader_section_assets WHERE document_id=? AND section_number=0",Integer.class,id));
+        jdbc.update("DELETE FROM documents WHERE id=?",id);
+    }
+
+    @Test void novelChaptersCanBePreviewedInsertedAndReorderedWithoutLosingReaderMarks() throws Exception {
+        var owner=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var first=new org.springframework.mock.web.MockMultipartFile("files","01.txt","text/plain","Первая глава. Знакомство.".getBytes(StandardCharsets.UTF_8));
+        var second=new org.springframework.mock.web.MockMultipartFile("files","02.txt","text/plain","Вторая глава. Продолжение.".getBytes(StandardCharsets.UTF_8));
+        var preview=mvc.perform(multipart("/api/novels/preview").file(first).file(second).session(owner).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chapters.length()").value(2)).andReturn();
+        String firstKey=JsonPath.read(preview.getResponse().getContentAsString(),"$.chapters[0].key");
+        String secondKey=JsonPath.read(preview.getResponse().getContentAsString(),"$.chapters[1].key");
+        String layout="{\"chapters\":[{\"key\":\""+secondKey+"\",\"title\":\"Продолжение\"},{\"key\":\""+firstKey+"\",\"title\":\"Начало\"}]}";
+        var created=mvc.perform(multipart("/api/novels").file(first).file(second)
+                        .file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",layout.getBytes(StandardCharsets.UTF_8)))
+                        .file(new org.springframework.mock.web.MockMultipartFile("title","","text/plain","Новелла".getBytes(StandardCharsets.UTF_8)))
+                        .session(owner).with(csrf()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.chapters[0].title").value("Продолжение")).andReturn();
+        String id=JsonPath.read(created.getResponse().getContentAsString(),"$.id");
+        mvc.perform(get("/api/novels/"+id+"/chapters").session(stranger)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/books/"+id+"/manifest").session(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.sections[0].title").value("Продолжение"));
+        int oldStart=jdbc.queryForObject("SELECT start_offset FROM reader_sections WHERE document_id=? AND section_number=1",Integer.class,UUID.fromString(id));
+        UUID user=jdbc.queryForObject("SELECT user_id FROM documents WHERE id=?",UUID.class,UUID.fromString(id));
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset,section_number,section_offset) VALUES (?,?,?,?,1,2)",user,UUID.fromString(id),oldStart+2,oldStart+2);
+        UUID mark=UUID.randomUUID(),highlight=UUID.randomUUID();
+        jdbc.update("INSERT INTO reader_bookmarks(id,user_id,document_id,position_offset,excerpt) VALUES (?,?,?,?,?)",mark,user,UUID.fromString(id),oldStart+2,"Первая");
+        jdbc.update("INSERT INTO reader_highlights(id,user_id,document_id,start_offset,end_offset,exact_text) VALUES (?,?,?,?,?,?)",highlight,user,UUID.fromString(id),oldStart,oldStart+6,"Первая");
+        jdbc.update("UPDATE novel_chapters SET confirmed_offset=length(content) WHERE document_id=?",UUID.fromString(id));
+        jdbc.update("INSERT INTO summary_jobs(id,document_id,compression_level,model_name,status,scope_mode,scope_section_number,source_revision) VALUES (?,?,?,'test-model','ready','whole',-1,1)",
+                UUID.randomUUID(),UUID.fromString(id),"medium");
+        var inserted=new org.springframework.mock.web.MockMultipartFile("files","middle.txt","text/plain","Вставленная глава.".getBytes(StandardCharsets.UTF_8));
+        String insertLayout="{\"chapters\":[{\"key\":\"0:0\",\"title\":\"Вставка\"}]}";
+        var added=mvc.perform(multipart("/api/novels/"+id+"/chapters").param("insertAt","1").file(inserted)
+                        .file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",insertLayout.getBytes(StandardCharsets.UTF_8)))
+                        .session(owner).with(csrf()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.chapters[1].title").value("Вставка")).andReturn();
+        int newStart=jdbc.queryForObject("SELECT start_offset FROM reader_sections WHERE document_id=? AND section_number=2",Integer.class,UUID.fromString(id));
+        assertEquals(newStart+2,jdbc.queryForObject("SELECT position_offset FROM reading_progress WHERE document_id=?",Integer.class,UUID.fromString(id)));
+        assertEquals(newStart+2,jdbc.queryForObject("SELECT position_offset FROM reader_bookmarks WHERE id=?",Integer.class,mark));
+        assertEquals(newStart,jdbc.queryForObject("SELECT start_offset FROM reader_highlights WHERE id=?",Integer.class,highlight));
+        mvc.perform(get("/api/documents/"+id+"/summary").session(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("stale"));
+        org.mockito.Mockito.when(llmSettings.configured()).thenReturn(true);
+        org.mockito.Mockito.when(llmSettings.model()).thenReturn("test-model");
+        org.mockito.Mockito.when(bookChatClient.answer(org.mockito.ArgumentMatchers.anyList(),org.mockito.ArgumentMatchers.eq("test-model")))
+                .thenReturn(new afoni.projectf.service.BookChatClient.Result("Ответ [1].",20,5));
+        mvc.perform(post("/api/books/"+id+"/chats").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isCreated());
+        UUID thread=jdbc.queryForObject("SELECT id FROM book_chat_threads WHERE document_id=?",UUID.class,UUID.fromString(id));
+        UUID turn=UUID.randomUUID();
+        mvc.perform(post("/api/books/"+id+"/chats/"+thread+"/turns").session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\""+turn+"\",\"mode\":\"grounded\",\"question\":\"Что было в первой главе?\"}"))
+                .andExpect(status().isOk());
+        String excerpt=jdbc.queryForObject("SELECT source_excerpt FROM book_chat_turns WHERE id=?",String.class,turn);
+        assertTrue(excerpt.contains("Вторая глава"));
+        assertFalse(excerpt.contains("Вставленная глава"));
+        String addedBody=added.getResponse().getContentAsString();
+        String continuationId=JsonPath.read(addedBody,"$.chapters[0].id");
+        String insertedId=JsonPath.read(addedBody,"$.chapters[1].id");
+        String beginningId=JsonPath.read(addedBody,"$.chapters[2].id");
+        String reordered="{\"chapters\":[{\"id\":\""+beginningId+"\",\"title\":\"Начало\"},{\"id\":\""+continuationId+"\",\"title\":\"Продолжение\"},{\"id\":\""+insertedId+"\",\"title\":\"Вставка\"}]}";
+        mvc.perform(put("/api/novels/"+id+"/chapters/order").session(owner).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content(reordered))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chapters[0].title").value("Начало"));
+        assertEquals(2,jdbc.queryForObject("SELECT position_offset FROM reader_bookmarks WHERE id=?",Integer.class,mark));
+        assertEquals(0,jdbc.queryForObject("SELECT start_offset FROM reader_highlights WHERE id=?",Integer.class,highlight));
+        mvc.perform(post("/api/documents/"+id+"/summary").session(owner).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"medium\",\"scope\":\"whole\",\"sectionNumber\":-1}"))
+                .andExpect(status().isNoContent());
+        assertEquals(3,jdbc.queryForObject("SELECT source_revision FROM summary_jobs WHERE document_id=?",Integer.class,UUID.fromString(id)));
+        assertTrue(jdbc.queryForObject("SELECT input_text FROM summary_steps s JOIN summary_jobs j ON j.id=s.job_id WHERE j.document_id=? LIMIT 1",String.class,UUID.fromString(id)).contains("Вставленная глава"));
+        jdbc.update("UPDATE summary_jobs SET status='ready' WHERE document_id=?",UUID.fromString(id));
+        mvc.perform(multipart("/api/novels/"+id+"/chapters").file(inserted)
+                        .file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",insertLayout.getBytes(StandardCharsets.UTF_8)))
+                        .session(owner).with(csrf())).andExpect(status().isConflict());
+        jdbc.update("DELETE FROM documents WHERE id=?",UUID.fromString(id));
+    }
+
+    @Test void novelChaptersSupportReadMarksAndSafeDeletion() throws Exception {
+        var owner=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var stranger=registerAccount(UUID.randomUUID()+"@example.test",UUID.randomUUID().toString());
+        var create=multipart("/api/novels");
+        for(int number=1;number<=3;number++) create.file(new org.springframework.mock.web.MockMultipartFile(
+                "files",number+".txt","text/plain",("Глава "+number+". Длинный текст главы "+number+".").getBytes(StandardCharsets.UTF_8)));
+        create.file(new org.springframework.mock.web.MockMultipartFile("layout","","text/plain",
+                "{\"chapters\":[{\"key\":\"0:0\",\"title\":\"Первая\"},{\"key\":\"1:0\",\"title\":\"Вторая\"},{\"key\":\"2:0\",\"title\":\"Третья\"}]}".getBytes(StandardCharsets.UTF_8)));
+        create.file(new org.springframework.mock.web.MockMultipartFile("title","","text/plain","Новелла".getBytes(StandardCharsets.UTF_8)));
+        var response=mvc.perform(create.session(owner).with(csrf())).andExpect(status().isCreated()).andReturn();
+        String id=JsonPath.read(response.getResponse().getContentAsString(),"$.id");
+        String first=JsonPath.read(response.getResponse().getContentAsString(),"$.chapters[0].id");
+        String second=JsonPath.read(response.getResponse().getContentAsString(),"$.chapters[1].id");
+        assertEquals(false,JsonPath.read(response.getResponse().getContentAsString(),"$.chapters[0].read"));
+        mvc.perform(put("/api/novels/"+id+"/chapters/"+first+"/read").session(stranger).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"read\":true}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(put("/api/novels/"+id+"/chapters/"+first+"/read").session(owner).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"read\":true}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.read").value(true));
+        mvc.perform(put("/api/novels/"+id+"/chapters/"+first+"/read").session(owner).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"read\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.read").value(false));
+        jdbc.update("UPDATE novel_chapters SET confirmed_offset=length(content) WHERE id=?",UUID.fromString(first));
+        mvc.perform(get("/api/novels/"+id+"/chapters").session(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].read").value(false));
+        mvc.perform(post("/api/novels/"+id+"/chapters/number/0/complete").session(stranger).with(csrf()))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/api/novels/"+id+"/chapters/number/0/complete").session(owner).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.read").value(true));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM reading_progress WHERE document_id=?",Integer.class,UUID.fromString(id)));
+        mvc.perform(put("/api/novels/"+id+"/chapters/"+first+"/read").session(owner).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"read\":false}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.read").value(false));
+        jdbc.update("UPDATE novel_chapters SET read_override=NULL WHERE id=?",UUID.fromString(first));
+        mvc.perform(get("/api/novels/"+id+"/chapters").session(owner))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].read").value(true));
+        int oldStart=jdbc.queryForObject("SELECT start_offset FROM reader_sections WHERE document_id=? AND section_number=1",Integer.class,UUID.fromString(id));
+        UUID user=jdbc.queryForObject("SELECT user_id FROM documents WHERE id=?",UUID.class,UUID.fromString(id));
+        jdbc.update("INSERT INTO reading_progress(user_id,document_id,position_offset,confirmed_offset,section_number,section_offset) VALUES (?,?,?,?,1,2)",
+                user,UUID.fromString(id),oldStart+2,oldStart+2);
+        UUID bookmark=UUID.randomUUID(),highlight=UUID.randomUUID();
+        jdbc.update("INSERT INTO reader_bookmarks(id,user_id,document_id,position_offset,excerpt) VALUES (?,?,?,?,?)",
+                bookmark,user,UUID.fromString(id),oldStart+2,"Вторая");
+        jdbc.update("INSERT INTO reader_highlights(id,user_id,document_id,start_offset,end_offset,exact_text) VALUES (?,?,?,?,?,?)",
+                highlight,user,UUID.fromString(id),oldStart,oldStart+6,"Глава 2");
+        mvc.perform(delete("/api/novels/"+id+"/chapters/"+second).session(stranger).with(csrf()))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/novels/"+id+"/chapters/"+second).session(owner).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chapters.length()").value(2))
+                .andExpect(jsonPath("$.chapters[1].title").value("Третья"));
+        int nextStart=jdbc.queryForObject("SELECT start_offset FROM reader_sections WHERE document_id=? AND section_number=1",Integer.class,UUID.fromString(id));
+        assertEquals(nextStart,jdbc.queryForObject("SELECT position_offset FROM reading_progress WHERE document_id=?",Integer.class,UUID.fromString(id)));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM reader_bookmarks WHERE id=?",Integer.class,bookmark));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM reader_highlights WHERE id=?",Integer.class,highlight));
+        String third=jdbc.queryForObject("SELECT id FROM novel_chapters WHERE document_id=? AND chapter_number=1",UUID.class,UUID.fromString(id)).toString();
+        mvc.perform(delete("/api/novels/"+id+"/chapters/"+third).session(owner).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.chapters.length()").value(1));
+        mvc.perform(delete("/api/novels/"+id+"/chapters/"+first).session(owner).with(csrf()))
+                .andExpect(status().isBadRequest());
+        jdbc.update("DELETE FROM documents WHERE id=?",UUID.fromString(id));
     }
 
     private MockHttpSession registerAccount(String email, String pass) throws Exception {
@@ -1167,7 +1489,7 @@ class ProjectFApplicationTests {
 
     @Test
     void migrationsAreAppliedOnceAndLongNotesRoundTrip() {
-        assertEquals(28, flyway.info().applied().length);
+        assertEquals(34, flyway.info().applied().length);
         assertEquals(0, flyway.migrate().migrationsExecuted);
         Note note = new Note();
         note.setTitle("Migration test");
@@ -1219,7 +1541,7 @@ class ProjectFApplicationTests {
                 .locations("classpath:db/migration").baselineVersion("0").load();
         // Explicit adoption is tested; normal startup never baselines automatically.
         legacy.baseline();
-        assertEquals(28, legacy.migrate().migrationsExecuted);
+        assertEquals(34, legacy.migrate().migrationsExecuted);
         assertEquals("Keep this record", jdbc.queryForObject("SELECT content FROM legacy_test.note WHERE id = 1", String.class));
         assertEquals("text", jdbc.queryForObject("SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_test' AND table_name = 'note' AND column_name = 'content'", String.class));
     }

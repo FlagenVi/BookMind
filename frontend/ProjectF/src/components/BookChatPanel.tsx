@@ -229,7 +229,7 @@ export function BookChatPanel({
                 threadId,
                 selection: selection ?? undefined,
               })
-          }} className="shrink-0 pt-3">
+          }} className="book-chat-composer shrink-0 pt-3">
             {selection && (
               <div className="mb-2 flex items-start justify-between gap-3 rounded-xl border border-accent-line bg-accent-soft p-3 text-xs">
                 <p className="line-clamp-3">«{selection.exactText}»</p>

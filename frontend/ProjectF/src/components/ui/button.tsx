@@ -9,7 +9,7 @@ const variants = cva(
   {
     variants: {
       variant: {
-        default: 'ui-button-primary bg-teal-700 text-white',
+        default: 'ui-button-primary bg-primary text-white',
         outline:
           'ui-button-outline border border-line bg-surface text-secondary',
       },

@@ -337,7 +337,7 @@ function UploadProgress({ label, value }: { label: string; value: number }) {
       </div>
       <progress
         aria-label={label}
-        className="mt-1 h-1.5 w-full accent-teal-700"
+        className="mt-1 h-1.5 w-full accent-primary"
         max={100}
         value={value}
       />

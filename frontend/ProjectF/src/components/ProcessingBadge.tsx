@@ -58,7 +58,7 @@ export function ProcessingBadge({
                 ? 'Прогресс текущего этапа изложения'
                 : 'Прогресс подготовки текста'
             }
-            className="block h-2 w-full accent-teal-600"
+            className="block h-2 w-full accent-primary"
             value={done}
             max={total}
           />

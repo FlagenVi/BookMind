@@ -61,7 +61,8 @@ public class BookTextExtractor {
                 case "epub" -> epub(bytes);
                 case "pdf" -> pdf(bytes);
                 case "docx" -> docx(bytes);
-                default -> throw bad("Поддерживаются TXT, MD, EPUB, FB2, PDF и DOCX");
+                case "html", "xhtml" -> html(bytes,format);
+                default -> throw bad("Поддерживаются TXT, MD, HTML, XHTML, EPUB, FB2, PDF и DOCX");
             };
             String text=book.text();
             if(text.startsWith("\uFEFF")) text=text.substring(1);
@@ -97,6 +98,23 @@ public class BookTextExtractor {
             if(!content.isBlank()) sections.add(new SectionData(titles.get(index),content,"main",null,List.of(),levels.get(index)));
         }
         return book(titles.getFirst(),null,sections,List.of());
+    }
+
+    private ExtractedBook html(byte[] bytes,String format) throws CharacterCodingException {
+        String source=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+        var parser="xhtml".equals(format)?org.jsoup.parser.Parser.xmlParser():org.jsoup.parser.Parser.htmlParser();
+        var document=org.jsoup.Jsoup.parse(source,"",parser);
+        document.select("script,style,nav,svg,math,iframe,form,template,noscript").remove();
+        var body=document.selectFirst("body");
+        if(body==null) body=document;
+        String title=null;
+        var heading=body.selectFirst("h1,h2,h3,h4,h5,h6");
+        if(heading!=null) title=clean(heading.text());
+        if(title==null) title=clean(document.title());
+        if(title==null) title="Глава";
+        var rendered=new StringBuilder();
+        renderHtml(body,rendered,0,new HashMap<>(),new ArrayList<>());
+        return book(title,null,List.of(new SectionData(limit(title,500),rendered.toString().strip(),"main",null,List.of())),List.of());
     }
 
     private ExtractedBook pdf(byte[] bytes) throws Exception {

@@ -23,6 +23,8 @@
 /docs/READER_ARCHITECTURE.md
 /docs/TASKS_WITHOUT_AI.md
 /.codex/
+/.agents/
+/skills-lock.json
 /.openai/
 /.claude/
 /.cursor/

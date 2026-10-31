@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import {
   BrowserRouter,
   Link,
@@ -19,30 +19,78 @@ import {
   Bell,
   FileText,
   Files,
-  Menu,
   MessageCircle,
   PanelLeftClose,
   PanelLeftOpen,
   UserRound,
   Users,
-  X,
   type LucideIcon,
 } from 'lucide-react'
 import { authApi } from './api/auth'
 import { booksApi, type BookItem } from './api/books'
 import { RequireAuth } from './components/RequireAuth'
 import { ThemeToggle } from './components/ThemeToggle'
-import { AuthPage } from './pages/AuthPage'
-import { EditorPage } from './pages/EditorPage'
-import { DocumentPage, DocumentsPage } from './pages/HistoryPage'
-import { LibraryPage } from './pages/LibraryPage'
-import { ProfilePage } from './pages/ProfilePage'
-import { ReaderPage } from './pages/ReaderPage'
-import {
-  CommunitiesPage,
-  CommunicationPage,
-  NotificationsPage,
-} from './pages/SocialPages'
+import { SocialRuntime } from './social/SocialRuntime'
+import { useSocialUnread } from './social/useSocialUnread'
+
+const AuthPage = lazy(() =>
+  import('./pages/AuthPage').then(({ AuthPage }) => ({ default: AuthPage })),
+)
+const EditorPage = lazy(() =>
+  import('./pages/EditorPage').then(({ EditorPage }) => ({
+    default: EditorPage,
+  })),
+)
+const DocumentsPage = lazy(() =>
+  import('./pages/HistoryPage').then(({ DocumentsPage }) => ({
+    default: DocumentsPage,
+  })),
+)
+const DocumentPage = lazy(() =>
+  import('./pages/HistoryPage').then(({ DocumentPage }) => ({
+    default: DocumentPage,
+  })),
+)
+const LibraryPage = lazy(() =>
+  import('./pages/LibraryPage').then(({ LibraryPage }) => ({
+    default: LibraryPage,
+  })),
+)
+const NovelChaptersPage = lazy(() =>
+  import('./pages/NovelChaptersPage').then(({ NovelChaptersPage }) => ({
+    default: NovelChaptersPage,
+  })),
+)
+const CommunicationPage = lazy(() =>
+  import('./pages/CommunicationPage').then(({ CommunicationPage }) => ({
+    default: CommunicationPage,
+  })),
+)
+const ProfilePage = lazy(() =>
+  import('./pages/ProfilePage').then(({ ProfilePage }) => ({
+    default: ProfilePage,
+  })),
+)
+const PublicProfilePage = lazy(() =>
+  import('./pages/PublicProfilePage').then(({ PublicProfilePage }) => ({
+    default: PublicProfilePage,
+  })),
+)
+const ReaderPage = lazy(() =>
+  import('./pages/ReaderPage').then(({ ReaderPage }) => ({
+    default: ReaderPage,
+  })),
+)
+const CommunitiesPage = lazy(() =>
+  import('./pages/SocialPages').then(({ CommunitiesPage }) => ({
+    default: CommunitiesPage,
+  })),
+)
+const NotificationsPage = lazy(() =>
+  import('./pages/NotificationsPage').then(({ NotificationsPage }) => ({
+    default: NotificationsPage,
+  })),
+)
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 30000 } },
@@ -61,6 +109,25 @@ const navigation: NavigationItem[] = [
   { to: '/communities', title: 'Сообщества', Icon: Users },
   { to: '/notifications', title: 'Уведомления', Icon: Bell },
 ]
+
+const mobileNavigation: NavigationItem[] = [
+  { to: '/library', title: 'Библиотека', Icon: BookOpen },
+  { to: '/documents', title: 'Документы', Icon: Files },
+  { to: '/communication', title: 'Общение', Icon: MessageCircle },
+  { to: '/communities', title: 'Сообщества', Icon: Users },
+  { to: '/profile', title: 'Профиль', Icon: UserRound },
+]
+
+function mobilePageTitle(pathname: string) {
+  if (pathname.startsWith('/library')) return 'Библиотека'
+  if (pathname.startsWith('/documents')) return 'Документы'
+  if (pathname.startsWith('/communication')) return 'Общение'
+  if (pathname.startsWith('/people/')) return 'Читатель'
+  if (pathname.startsWith('/communities')) return 'Сообщества'
+  if (pathname.startsWith('/notifications')) return 'Уведомления'
+  if (pathname.startsWith('/profile')) return 'Профиль'
+  return 'Новый материал'
+}
 
 function readSidebarCollapsed() {
   try {
@@ -84,10 +151,8 @@ function AppShell() {
   const location = useLocation()
   const isReader = /^\/library\/[^/]+\/read\/?$/.test(location.pathname)
   const isAuth = location.pathname === '/auth'
-  const hasSidebar = !isReader && !isAuth
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const mobileMenu = useRef<HTMLElement>(null)
-  const mobileMenuTrigger = useRef<HTMLButtonElement>(null)
+  const isPublicProfile = /^\/people\/[^/]+\/?$/.test(location.pathname)
+  const hasSidebar = !isReader && !isAuth && !isPublicProfile
   const [collapsed, setCollapsed] = useState(readSidebarCollapsed)
   const me = useQuery({
     queryKey: ['me'],
@@ -100,48 +165,14 @@ function AppShell() {
       booksApi.list(0, { status: 'reading', sort: 'recent' }, signal),
     enabled: hasSidebar && !!me.data,
   })
+  const unread = useSocialUnread(!!me.data)
+  const badgeFor = (to: string) =>
+    to === '/communication'
+      ? (unread.data?.messages ?? 0)
+      : to === '/notifications'
+        ? (unread.data?.notifications ?? 0)
+        : 0
 
-  useEffect(() => {
-    if (!mobileOpen) return
-    const previousOverflow = document.body.style.overflow
-    const trigger = mobileMenuTrigger.current
-    const frame = requestAnimationFrame(() =>
-      mobileMenu.current?.querySelector<HTMLElement>('[aria-label="Закрыть меню"]')?.focus(),
-    )
-    const handleMenuKeys = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        setMobileOpen(false)
-        return
-      }
-      if (event.key !== 'Tab' || !mobileMenu.current) return
-      const items = Array.from(mobileMenu.current.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])'))
-        .filter((item) => item.getClientRects().length > 0)
-      if (!items.length) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (!mobileMenu.current.contains(document.activeElement)) {
-        event.preventDefault()
-        first.focus()
-      } else if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault()
-        last.focus()
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault()
-        first.focus()
-      }
-    }
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleMenuKeys)
-    return () => {
-      cancelAnimationFrame(frame)
-      document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', handleMenuKeys)
-      if (trigger?.isConnected) trigger.focus()
-    }
-  }, [mobileOpen])
-
-  const closeMobile = () => setMobileOpen(false)
   const toggleCollapsed = () => {
     setCollapsed((value) => {
       const next = !value
@@ -156,6 +187,7 @@ function AppShell() {
 
   return (
     <>
+      {me.data && <SocialRuntime key={me.data.id} userId={me.data.id} />}
       <a href="#main" className="sr-only focus:not-sr-only">
         Перейти к содержимому
       </a>
@@ -168,45 +200,42 @@ function AppShell() {
       >
         {hasSidebar && (
           <>
-            <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-line bg-surface/95 px-4 backdrop-blur md:hidden">
+            <header className="mobile-app-header sticky top-0 z-30 grid grid-cols-[44px_minmax(0,1fr)_44px] items-center border-b border-line bg-surface/95 px-3 pb-2 pt-2 backdrop-blur md:hidden">
               <Link
                 to="/library"
-                className="brand-link flex items-center gap-2.5 rounded-xl font-bold tracking-tight"
+                className="brand-link grid size-11 place-items-center rounded-xl text-white"
+                aria-label="BookMind — библиотека"
               >
-                <span className="rounded-lg bg-teal-700 p-1.5 text-white">
+                <span className="grid size-9 place-items-center rounded-xl bg-primary">
                   <FileText size={19} aria-hidden="true" />
                 </span>
-                BookMind
               </Link>
-              <button
-                ref={mobileMenuTrigger}
-                type="button"
-                className="grid h-10 w-10 place-items-center rounded-xl border border-line text-secondary transition hover:border-accent-line hover:bg-accent-soft hover:text-accent"
-                aria-label="Открыть меню"
-                aria-expanded={mobileOpen}
-                aria-controls="app-sidebar"
-                onClick={() => setMobileOpen(true)}
+              <div className="min-w-0 px-2 text-center">
+                <p className="truncate text-sm font-semibold">
+                  {mobilePageTitle(location.pathname)}
+                </p>
+                <p className="truncate text-[10px] font-medium text-muted">
+                  BookMind
+                </p>
+              </div>
+              <Link
+                to="/notifications"
+                className={`relative grid size-11 place-items-center rounded-xl border transition ${location.pathname.startsWith('/notifications') ? 'border-accent-line bg-accent-soft text-accent' : 'border-line text-secondary'}`}
+                aria-label="Уведомления"
               >
-                <Menu size={20} aria-hidden="true" />
-              </button>
+                <Bell size={20} aria-hidden="true" />
+                {badgeFor('/notifications') > 0 && (
+                  <span className="absolute -right-1 -top-1 rounded-full bg-primary px-1.5 text-[10px] font-semibold text-white">
+                    {Math.min(99, badgeFor('/notifications'))}
+                    <span className="sr-only"> непрочитанных уведомлений</span>
+                  </span>
+                )}
+              </Link>
             </header>
 
-            {mobileOpen && (
-              <button
-                type="button"
-                className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] md:hidden"
-                aria-label="Закрыть меню"
-                onClick={closeMobile}
-              />
-            )}
-
             <aside
-              ref={mobileMenu}
               id="app-sidebar"
-              role={mobileOpen ? 'dialog' : undefined}
-              aria-modal={mobileOpen ? 'true' : undefined}
-              aria-label={mobileOpen ? 'Главное меню' : undefined}
-              className={`fixed inset-y-0 left-0 z-50 flex h-screen w-[min(290px,88vw)] flex-col overflow-hidden border-r border-line bg-surface p-5 shadow-2xl transition-[transform,padding] duration-300 md:sticky md:top-0 md:z-20 md:w-auto md:translate-x-0 md:overflow-visible md:shadow-none ${mobileOpen ? 'translate-x-0' : '-translate-x-full'} ${collapsed ? 'sidebar-collapsed md:p-3' : 'md:p-5'}`}
+              className={`sticky top-0 z-20 hidden h-screen flex-col overflow-visible border-r border-line bg-surface shadow-none transition-[padding] duration-300 md:flex ${collapsed ? 'sidebar-collapsed p-3' : 'p-5'}`}
             >
               <div
                 className={`relative flex shrink-0 items-center gap-2 ${collapsed ? 'md:flex-col' : ''}`}
@@ -215,9 +244,8 @@ function AppShell() {
                   to="/library"
                   title={collapsed ? 'BookMind' : undefined}
                   className={`brand-link flex min-w-0 flex-1 items-center gap-3 rounded-xl font-bold tracking-tight ${collapsed ? 'md:justify-center' : ''}`}
-                  onClick={closeMobile}
                 >
-                  <span className="shrink-0 rounded-xl bg-teal-700 p-2 text-white">
+                  <span className="shrink-0 rounded-xl bg-primary p-2 text-white">
                     <FileText size={21} aria-hidden="true" />
                   </span>
                   <span
@@ -226,14 +254,6 @@ function AppShell() {
                     BookMind
                   </span>
                 </Link>
-                <button
-                  type="button"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-subtle hover:text-foreground md:hidden"
-                  aria-label="Закрыть меню"
-                  onClick={closeMobile}
-                >
-                  <X size={20} aria-hidden="true" />
-                </button>
                 <button
                   type="button"
                   className="hidden h-9 w-9 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-subtle hover:text-foreground md:grid"
@@ -271,12 +291,17 @@ function AppShell() {
                     className={({ isActive }) =>
                       `nav-link sidebar-item flex min-h-11 items-center gap-3 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium ${collapsed ? 'md:justify-center md:px-0' : ''} ${isActive ? 'bg-accent-soft text-accent' : 'text-secondary'}`
                     }
-                    onClick={closeMobile}
                   >
                     <Icon size={18} aria-hidden="true" />
                     <span className={collapsed ? 'md:hidden' : ''}>
                       {title}
                     </span>
+                    {badgeFor(to) > 0 && (
+                      <span className="ml-auto rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                        {badgeFor(to) > 99 ? '99+' : badgeFor(to)}
+                        <span className="sr-only"> непрочитанных</span>
+                      </span>
+                    )}
                     {collapsed && (
                       <span
                         className="sidebar-tooltip hidden md:block"
@@ -293,7 +318,7 @@ function AppShell() {
                 book={currentBooks.data?.items[0]}
                 loading={currentBooks.isPending && !!me.data}
                 collapsed={collapsed}
-                onNavigate={closeMobile}
+                onNavigate={() => undefined}
               />
 
               <footer className="mt-auto shrink-0 border-t border-line pt-3">
@@ -303,7 +328,6 @@ function AppShell() {
                   className={({ isActive }) =>
                     `nav-link sidebar-item flex min-h-12 items-center gap-3 rounded-xl px-2.5 py-2 text-sm ${collapsed ? 'md:justify-center md:px-0' : ''} ${isActive ? 'bg-accent-soft text-accent' : 'text-secondary'}`
                   }
-                  onClick={closeMobile}
                 >
                   <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-lg bg-accent-soft font-semibold text-accent">
                     {me.data?.hasAvatar ? (
@@ -347,6 +371,32 @@ function AppShell() {
                 <ThemeToggle compact={collapsed} />
               </footer>
             </aside>
+
+            <nav
+              aria-label="Мобильная навигация"
+              className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-line bg-surface/95 px-1 pt-1 backdrop-blur md:hidden"
+            >
+              {mobileNavigation.map(({ to, title, Icon }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={({ isActive }) =>
+                    `flex min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-1.5 text-[10px] font-medium transition ${isActive ? 'bg-accent-soft text-accent' : 'text-muted'}`
+                  }
+                >
+                  <span className="relative">
+                    <Icon size={20} aria-hidden="true" />
+                    {badgeFor(to) > 0 && (
+                      <span className="absolute -right-3 -top-1 rounded-full bg-primary px-1 text-[9px] font-semibold text-white">
+                        {badgeFor(to) > 99 ? '99+' : badgeFor(to)}
+                        <span className="sr-only"> непрочитанных</span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="w-full truncate text-center">{title}</span>
+                </NavLink>
+              ))}
+            </nav>
           </>
         )}
 
@@ -355,10 +405,21 @@ function AppShell() {
           className={
             isReader
               ? 'w-full'
-              : 'mx-auto w-full max-w-6xl px-5 py-8 md:px-10 md:py-12'
+              : `${hasSidebar ? 'mobile-main-safe' : ''} mx-auto w-full max-w-6xl px-4 py-6 sm:px-5 sm:py-8 md:px-10 md:py-12`
           }
         >
-          <AppRoutes />
+          <Suspense
+            fallback={
+              <div
+                className={`grid place-items-center text-sm text-muted ${isReader ? 'min-h-dvh' : 'min-h-[40vh]'}`}
+                role="status"
+              >
+                Открываем страницу…
+              </div>
+            }
+          >
+            <AppRoutes />
+          </Suspense>
         </main>
       </div>
     </>
@@ -418,7 +479,7 @@ function CurrentBook({
                 <p className="mt-1 text-[11px] text-muted">{progress}%</p>
                 <div className="mt-2 h-1 overflow-hidden rounded-full bg-line">
                   <div
-                    className="h-full rounded-full bg-teal-600"
+                    className="h-full rounded-full bg-primary"
                     style={{ width: `${progress}%` }}
                   />
                 </div>
@@ -491,6 +552,22 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/library/novels/new"
+        element={
+          <RequireAuth>
+            <NovelChaptersPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/library/:id/chapters"
+        element={
+          <RequireAuth>
+            <NovelChaptersPage />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/library/:id/read"
         element={
           <RequireAuth>
@@ -530,6 +607,7 @@ function AppRoutes() {
           </RequireAuth>
         }
       />
+      <Route path="/people/:username" element={<PublicProfilePage />} />
       <Route
         path="/communities"
         element={
@@ -579,5 +657,10 @@ function LegacyDocumentRedirect() {
 
 function LegacyBookContextRedirect() {
   const { id = '' } = useParams()
-  return <Navigate to={`/library/${encodeURIComponent(id)}/read?panel=book&tab=summary`} replace />
+  return (
+    <Navigate
+      to={`/library/${encodeURIComponent(id)}/read?panel=book&tab=summary`}
+      replace
+    />
+  )
 }

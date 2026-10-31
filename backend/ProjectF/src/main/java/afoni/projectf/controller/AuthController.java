@@ -28,8 +28,11 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.UUID;
 
 @RestController @RequestMapping("/api/auth")
@@ -42,14 +45,16 @@ public class AuthController {
     private final HttpSessionCsrfTokenRepository csrf;
     private final UserSessionService sessions;
     private final RememberedLoginService remembered;
+    private final JdbcTemplate jdbc;
 
     public AuthController(UserAccountRepository users, DocumentRepository documents, PasswordEncoder encoder,
                           AuthenticationManager manager, SecurityContextRepository contexts, HttpSessionCsrfTokenRepository csrf,
-                          UserSessionService sessions, RememberedLoginService remembered) {
+                          UserSessionService sessions, RememberedLoginService remembered, JdbcTemplate jdbc) {
         this.users = users; this.documents = documents; this.encoder = encoder;
         this.manager = manager; this.contexts = contexts; this.csrf = csrf;
         this.sessions = sessions;
         this.remembered = remembered;
+        this.jdbc = jdbc;
     }
 
     public record Credentials(@NotBlank @Email @Size(max=254) String email,
@@ -59,8 +64,16 @@ public class AuthController {
         @Override public String toString() { return "Credentials[redacted]"; }
     }
     public record Profile(UUID id, String email, String displayName, String bio, boolean hasAvatar,
-                          Instant avatarUpdatedAt, Instant createdAt, long documentCount) {}
-    public record ProfileUpdate(@Size(max=80) String displayName, @Size(max=500) String bio) {}
+                          Instant avatarUpdatedAt, Instant createdAt, long documentCount,
+                          String username, String visibility, boolean showLibrary, boolean showStatistics,
+                          boolean showActivity, boolean showFriends, List<String> favoriteGenres,
+                          List<UUID> featuredBookIds) {}
+    public record ProfileUpdate(@Size(max=80) String displayName, @Size(max=500) String bio,
+                                @Pattern(regexp="[a-z][a-z0-9_]{2,23}") String username,
+                                @Pattern(regexp="public|friends|private") String visibility,
+                                Boolean showLibrary, Boolean showStatistics, Boolean showActivity, Boolean showFriends,
+                                @Size(max=6) List<@NotBlank @Size(max=60) String> favoriteGenres,
+                                @Size(max=6) List<@NotNull UUID> featuredBookIds) {}
     public record CsrfResponse(String token, String headerName) {}
 
     @GetMapping("/csrf") CsrfResponse csrf(CsrfToken token) { return new CsrfResponse(token.getToken(), token.getHeaderName()); }
@@ -101,9 +114,40 @@ public class AuthController {
     @PutMapping("/profile") @Transactional
     Profile updateProfile(Authentication auth, @Valid @RequestBody ProfileUpdate input) {
         var account = account(auth);
-        account.setDisplayName(clean(input.displayName()));
-        account.setBio(clean(input.bio()));
-        return toProfile(users.saveAndFlush(account));
+        if(input.displayName()!=null) account.setDisplayName(clean(input.displayName()));
+        if(input.bio()!=null) account.setBio(clean(input.bio()));
+        if(input.username()!=null) account.setUsername(input.username().toLowerCase(Locale.ROOT));
+        if(input.visibility()!=null) account.setProfileVisibility(input.visibility());
+        if(input.showLibrary()!=null) account.setShowLibrary(input.showLibrary());
+        if(input.showStatistics()!=null) account.setShowStatistics(input.showStatistics());
+        if(input.showActivity()!=null) account.setShowActivity(input.showActivity());
+        if(input.showFriends()!=null) account.setShowFriends(input.showFriends());
+        users.saveAndFlush(account);
+        if(input.favoriteGenres()!=null) {
+            var genres=new LinkedHashSet<String>();
+            for(String value:input.favoriteGenres()) {
+                String genre=value.strip();
+                if(genre.isBlank() || genres.stream().anyMatch(item->item.equalsIgnoreCase(genre)))
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Укажите разные любимые жанры");
+                genres.add(genre);
+            }
+            jdbc.update("DELETE FROM profile_genres WHERE user_id=?",account.getId());
+            int position=0;
+            for(String genre:genres) jdbc.update("INSERT INTO profile_genres(user_id,genre,position) VALUES (?,?,?)",account.getId(),genre,position++);
+        }
+        if(input.featuredBookIds()!=null) {
+            var bookIds=new LinkedHashSet<>(input.featuredBookIds());
+            if(bookIds.size()!=input.featuredBookIds().size())
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Книги не должны повторяться");
+            for(UUID bookId:bookIds) {
+                Boolean owned=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM documents WHERE id=? AND user_id=? AND material_type='BOOK')",Boolean.class,bookId,account.getId());
+                if(!Boolean.TRUE.equals(owned)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Выберите книгу из своей библиотеки");
+            }
+            jdbc.update("DELETE FROM profile_featured_books WHERE user_id=?",account.getId());
+            int position=0;
+            for(UUID bookId:bookIds) jdbc.update("INSERT INTO profile_featured_books(user_id,document_id,position) VALUES (?,?,?)",account.getId(),bookId,position++);
+        }
+        return toProfile(account);
     }
 
     @PostMapping(value="/profile/avatar", consumes=MediaType.MULTIPART_FORM_DATA_VALUE) @Transactional
@@ -162,9 +206,12 @@ public class AuthController {
     }
 
     private Profile toProfile(UserAccount account) {
+        var genres=jdbc.query("SELECT genre FROM profile_genres WHERE user_id=? ORDER BY position",(rs,n)->rs.getString(1),account.getId());
+        var books=jdbc.query("SELECT document_id FROM profile_featured_books WHERE user_id=? ORDER BY position",(rs,n)->rs.getObject(1,UUID.class),account.getId());
         return new Profile(account.getId(), account.getEmail(), account.getDisplayName(), account.getBio(),
                 account.getAvatarData() != null, account.getUpdatedAt(), account.getCreatedAt(),
-                documents.countByUserId(account.getId()));
+                documents.countByUserId(account.getId()),account.getUsername(),account.getProfileVisibility(),
+                account.isShowLibrary(),account.isShowStatistics(),account.isShowActivity(),account.isShowFriends(),genres,books);
     }
 
     private String clean(String value) {

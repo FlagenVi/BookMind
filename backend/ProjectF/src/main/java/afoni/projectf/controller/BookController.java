@@ -88,7 +88,7 @@ public class BookController {
         return jdbc.query("SELECT d.id,d.title,d.author,d.source_type,d.original_filename,d.original_size,d.publisher,d.publication_date,"+
                         "d.language,d.description,d.created_at,d.updated_at,EXISTS(SELECT 1 FROM book_assets a WHERE a.document_id=d.id AND a.is_cover),"+
                         "d.favorite,d.collection_id,d.original_sha256,length(d.original_text),(SELECT count(*) FROM reader_sections s WHERE s.document_id=d.id),"+
-                        "(SELECT count(*) FROM book_assets a WHERE a.document_id=d.id),COALESCE(j.status,'not_started'),j.next_offset,j.total_characters,j.error_message "+
+                        "(SELECT count(*) FROM book_assets a WHERE a.document_id=d.id),CASE WHEN d.source_type='novel' THEN 'ready' ELSE COALESCE(j.status,'not_started') END,j.next_offset,j.total_characters,j.error_message "+
                         "FROM documents d LEFT JOIN document_jobs j ON j.document_id=d.id WHERE d.id=?",
                 rs->{if(!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND);return new BookDetails(
                         rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),genres(id),rs.getString(4),rs.getString(5),
@@ -163,7 +163,7 @@ public class BookController {
                               @RequestParam(defaultValue="all") String collection) {
         if(page<0 || page>100000 || q.length()>100 || genre.length()>60) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         if(!Set.of("all","want_to_read","reading","finished").contains(status)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Неизвестный статус книги");
-        if(!Set.of("all","manual","txt","md","epub","fb2","pdf","docx").contains(format)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Неизвестный формат книги");
+        if(!Set.of("all","manual","txt","md","epub","fb2","pdf","docx","novel").contains(format)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Неизвестный формат книги");
         if(!Set.of("all","yes").contains(favorite)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Неизвестный фильтр избранного");
         String defaultDirection=Set.of("title","author").contains(sort)?"asc":"desc";
         String actualDirection="default".equals(direction)?defaultDirection:direction;
@@ -195,7 +195,7 @@ public class BookController {
             collectionOwned(collectionId,owner);where+=" AND d.collection_id=?";args.add(collectionId);
         }
         var items=jdbc.query("SELECT d.id,d.title,d.author,d.source_type,d.original_filename,d.original_size,d.created_at,d.updated_at,length(d.original_text),"+
-                        "COALESCE(r.position_offset,0),COALESCE(j.status,'not_started'),EXISTS(SELECT 1 FROM book_assets a WHERE a.document_id=d.id AND a.is_cover),"+
+                        "COALESCE(r.position_offset,0),CASE WHEN d.source_type='novel' THEN 'ready' ELSE COALESCE(j.status,'not_started') END,EXISTS(SELECT 1 FROM book_assets a WHERE a.document_id=d.id AND a.is_cover),"+
                         "d.favorite,d.collection_id,d.library_status,r.last_read_at,COALESCE(r.reading_seconds,0) FROM documents d "+
                         "LEFT JOIN reading_progress r ON r.document_id=d.id AND r.user_id=d.user_id "+
                         "LEFT JOIN document_jobs j ON j.document_id=d.id WHERE "+where+" ORDER BY "+order+" LIMIT ? OFFSET ?",
@@ -367,8 +367,12 @@ public class BookController {
     }
 
     @PutMapping("/{id}/progress") @Transactional Progress saveProgress(Authentication auth,@PathVariable UUID id,@Valid @RequestBody ProgressInput input) {
-        Document doc=owned(id,auth); UUID owner=owner(auth);
-        if(input.positionOffset()>doc.getOriginalText().length() || (input.confirmedOffset()!=null && input.confirmedOffset()>doc.getOriginalText().length()))
+        UUID owner=owner(auth);
+        var documents=jdbc.query("SELECT source_type,original_text FROM documents WHERE id=? AND user_id=? FOR SHARE",
+                (rs,n)->new AbstractMap.SimpleEntry<>(rs.getString(1),rs.getString(2).length()),id,owner);
+        if(documents.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        String format=documents.getFirst().getKey();int textLength=documents.getFirst().getValue();
+        if(input.positionOffset()>textLength || (input.confirmedOffset()!=null && input.confirmedOffset()>textLength))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Позиция находится за пределами книги");
         var current=jdbc.query("SELECT version,position_offset,confirmed_offset FROM reading_progress WHERE user_id=? AND document_id=? FOR UPDATE",
                 (rs,n)->new ProgressState(rs.getInt(1),rs.getInt(2),rs.getInt(3)),owner,id);
@@ -377,8 +381,12 @@ public class BookController {
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Позиция уже изменена в другой вкладке");
         if(current.isEmpty() && input.version()!=null && expected!=0)
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Позиция уже изменена в другой вкладке");
-        var anchor=resolveProgressAnchor(id,input,doc.getOriginalText().length());
+        var anchor=resolveProgressAnchor(id,input,textLength);
         int confirmed=input.confirmedOffset()==null?0:input.confirmedOffset();
+        if("novel".equals(format) && anchor.sectionNumber()!=null && anchor.sectionNumber()>=0)
+            jdbc.update("UPDATE novel_chapters n SET confirmed_offset=GREATEST(n.confirmed_offset,LEAST(s.end_offset-s.start_offset,GREATEST(0,LEAST(?,?)-s.start_offset))) "+
+                            "FROM reader_sections s WHERE s.document_id=? AND s.section_number=? AND s.novel_chapter_id=n.id",
+                    anchor.positionOffset(),confirmed,id,anchor.sectionNumber());
         int previousPosition=current.isEmpty()?0:current.getFirst().positionOffset(),previousConfirmed=current.isEmpty()?0:current.getFirst().confirmedOffset();
         int elapsed=recordReadingSession(owner,id,input,previousPosition,anchor.positionOffset(),previousConfirmed,confirmed);
         if(current.isEmpty()) {
@@ -649,10 +657,19 @@ public class BookController {
                 (rs,n)->new SectionLink(rs.getInt(1),rs.getInt(2),rs.getInt(3),rs.getInt(4),rs.getInt(5),rs.getString(6)),id,number);
     }
     private ResponseEntity<byte[]> image(BinaryAsset asset) {
-        if(asset.mediaType()==null || !asset.mediaType().startsWith("image/")) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        return imageResponse(asset.content(),asset.mediaType());
+    }
+    static ResponseEntity<byte[]> imageResponse(byte[] content,String mediaType) {
+        if(mediaType==null || !mediaType.startsWith("image/")) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         MediaType type;
-        try { type=MediaType.parseMediaType(asset.mediaType()); } catch(IllegalArgumentException ignored) { type=MediaType.APPLICATION_OCTET_STREAM; }
-        return ResponseEntity.ok().contentType(type).header(HttpHeaders.CACHE_CONTROL,"private, max-age=86400").body(asset.content());
+        try { type=MediaType.parseMediaType(mediaType); } catch(IllegalArgumentException ignored) { type=MediaType.APPLICATION_OCTET_STREAM; }
+        var response=ResponseEntity.ok().contentType(type)
+                .header(HttpHeaders.CACHE_CONTROL,"private, max-age=86400")
+                .header("Content-Security-Policy","sandbox; default-src 'none'; style-src 'unsafe-inline'")
+                .header("X-Content-Type-Options","nosniff");
+        if(MediaType.parseMediaType("image/svg+xml").isCompatibleWith(type))
+            response.header(HttpHeaders.CONTENT_DISPOSITION,"attachment");
+        return response.body(content);
     }
     private BookCollection collectionOwned(UUID id,UUID user) {
         return jdbc.query("SELECT c.id,c.name,count(d.id),c.created_at,c.updated_at FROM book_collections c "+

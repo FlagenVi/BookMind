@@ -69,7 +69,7 @@ export function SideDrawer({
 
   return (
     <div
-      className="filter-drawer-overlay fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px]"
+      className="filter-drawer-overlay fixed inset-0 z-50 flex items-end bg-black/45 backdrop-blur-[2px] sm:block"
       role="presentation"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target) onClose()
@@ -81,7 +81,7 @@ export function SideDrawer({
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        className="filter-drawer-panel ml-auto flex h-full w-full max-w-md flex-col border-l border-line bg-surface text-foreground shadow-2xl"
+        className="filter-drawer-panel mt-auto flex h-[88dvh] w-full max-w-none flex-col rounded-t-3xl border-t border-line bg-surface text-foreground shadow-2xl sm:ml-auto sm:h-full sm:max-w-md sm:rounded-none sm:border-l sm:border-t-0"
       >
         {children}
       </aside>

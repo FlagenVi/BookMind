@@ -58,6 +58,29 @@ export function confirmedOffsetAfter(
     : confirmedOffset
 }
 
+export function chapterStartOffset(chapterNumber: string | null, sections: BookSection[]): number | null {
+  if (chapterNumber === null || !/^\d+$/.test(chapterNumber)) return null
+  const number = Number(chapterNumber)
+  if (!Number.isSafeInteger(number)) return null
+  return sections.find((section) => section.role === 'main' && section.number === number)?.startOffset ?? null
+}
+
+export function completedChapterOnAdvance(
+  previousOffset: number,
+  nextOffset: number,
+  source: 'user' | 'programmatic',
+  sections: BookSection[],
+  textLength: number,
+): number | null {
+  if (source !== 'user' || nextOffset <= previousOffset) return null
+  const previous = anchorFromOffset(previousOffset, sections, textLength).sectionNumber
+  const next = anchorFromOffset(nextOffset, sections, textLength).sectionNumber
+  if (previous === null || next !== previous + 1) return null
+  const previousSection = sections.find((section) => section.number === previous)
+  const nextSection = sections.find((section) => section.number === next)
+  return previousSection?.role === 'main' && nextSection?.role === 'main' ? previous : null
+}
+
 export function parseJumpTarget(
   kind: 'percent' | 'offset',
   rawValue: string,

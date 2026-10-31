@@ -10,6 +10,11 @@
   display: none;
 }
 
+.activity-level-1 { background: var(--app-activity-1); }
+.activity-level-2 { background: var(--app-activity-2); }
+.activity-level-3 { background: var(--app-activity-3); }
+.activity-level-4 { background: var(--app-activity-4); }
+
 .project-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: color-mix(
@@ -46,6 +51,60 @@
   display: none;
 }
 
+@media (max-width: 639px) {
+  .library-collections {
+    scrollbar-width: none;
+  }
+
+  .library-collections::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.mobile-app-header {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+.mobile-bottom-nav {
+  min-height: calc(4rem + env(safe-area-inset-bottom));
+  padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+}
+
+.mobile-main-safe {
+  padding-bottom: calc(5.75rem + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 768px) {
+  .mobile-main-safe {
+    padding-bottom: 3rem;
+  }
+}
+
+@media (max-width: 639px) {
+  .modal-dialog-panel {
+    width: 100% !important;
+    max-width: none !important;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 0.75rem) !important;
+    overflow-y: auto;
+    border-bottom-right-radius: 0 !important;
+    border-bottom-left-radius: 0 !important;
+    padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+  }
+
+  .reader-shell > header {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+
+  .reader-shell > div > main > footer,
+  .book-chat-composer {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .filter-drawer-panel > footer {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
 @theme {
   --font-sans: 'Segoe UI', sans-serif;
 }
@@ -62,6 +121,7 @@
   --color-accent: var(--app-accent);
   --color-accent-soft: var(--app-accent-soft);
   --color-accent-line: var(--app-accent-line);
+  --color-primary: var(--app-primary);
   --color-danger: var(--app-danger);
   --color-danger-soft: var(--app-danger-soft);
   --color-success: var(--app-success);
@@ -76,11 +136,17 @@
   --app-foreground: #27343a;
   --app-secondary: #47575e;
   --app-muted: #5d6d73;
-  --app-line: #dadbd2;
-  --app-line-strong: #bfc8c0;
-  --app-accent: #0b766d;
-  --app-accent-soft: #e3f1eb;
-  --app-accent-line: #a9d3c8;
+  --app-line: #ddd9d5;
+  --app-line-strong: #c7c2c7;
+  --app-accent: #5058a8;
+  --app-accent-soft: #ecebfa;
+  --app-accent-line: #c6c8eb;
+  --app-primary: #4e58a6;
+  --app-primary-hover: #3e478e;
+  --app-activity-1: #dadcf6;
+  --app-activity-2: #a8ade5;
+  --app-activity-3: #737ac8;
+  --app-activity-4: #4e58a6;
   --app-danger: #b9384b;
   --app-danger-soft: #fae9e9;
   --app-success: #176b53;
@@ -97,9 +163,15 @@
   --app-muted: #9eafc2;
   --app-line: #304252;
   --app-line-strong: #52677b;
-  --app-accent: #71dfca;
-  --app-accent-soft: #142f30;
-  --app-accent-line: #2c655f;
+  --app-accent: #b8bdff;
+  --app-accent-soft: #252b47;
+  --app-accent-line: #515b91;
+  --app-primary: #5863ac;
+  --app-primary-hover: #6671b8;
+  --app-activity-1: #30375f;
+  --app-activity-2: #525da3;
+  --app-activity-3: #808bd7;
+  --app-activity-4: #c3c8ff;
   --app-danger: #fca5a5;
   --app-danger-soft: #382127;
   --app-success: #86efac;
@@ -117,9 +189,11 @@
   --app-muted: #665f55;
   --app-line: #d8d2c8;
   --app-line-strong: #b6ad9f;
-  --app-accent: #0b766d;
-  --app-accent-soft: #e5f1eb;
-  --app-accent-line: #a9d3c8;
+  --app-accent: #5058a8;
+  --app-accent-soft: #eeecfa;
+  --app-accent-line: #c6c8eb;
+  --app-primary: #4e58a6;
+  --app-primary-hover: #3e478e;
   --app-danger: #b9384b;
   --app-danger-soft: #fae9e9;
   --app-success: #176b53;
@@ -137,9 +211,11 @@
   --app-muted: #705b3f;
   --app-line: #cbb891;
   --app-line-strong: #a48d64;
-  --app-accent: #0b6a62;
-  --app-accent-soft: #d8e7d7;
-  --app-accent-line: #8db7a6;
+  --app-accent: #5e5491;
+  --app-accent-soft: #e8dded;
+  --app-accent-line: #bbaed0;
+  --app-primary: #5e5491;
+  --app-primary-hover: #4b4078;
   --app-danger: #a53648;
   --app-danger-soft: #f4d7cf;
   --app-success: #25674f;
@@ -157,9 +233,11 @@
   --app-muted: #aab4b6;
   --app-line: #3a4650;
   --app-line-strong: #596a72;
-  --app-accent: #71dfca;
-  --app-accent-soft: #173537;
-  --app-accent-line: #326c65;
+  --app-accent: #b8bdff;
+  --app-accent-soft: #2a2c48;
+  --app-accent-line: #5b6093;
+  --app-primary: #5863ac;
+  --app-primary-hover: #6671b8;
   --app-danger: #fca5a5;
   --app-danger-soft: #382127;
   --app-success: #86efac;
@@ -258,7 +336,7 @@
   }
 
   .ui-button-primary {
-    box-shadow: 0 2px 4px rgb(15 118 110 / 12%);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--app-primary) 18%, transparent);
   }
 
   .ui-button:focus-visible,
@@ -290,7 +368,7 @@
   .nav-link[aria-current='page'] {
     border-color: var(--app-accent-line);
     background: var(--app-accent-soft);
-    box-shadow: 0 2px 6px rgb(15 118 110 / 5%);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--app-accent) 9%, transparent);
   }
 
   .nav-link[aria-current='page']::before {
@@ -342,8 +420,8 @@
   textarea:focus,
   select:focus {
     outline: none;
-    border-color: var(--color-teal-500);
-    box-shadow: 0 0 0 4px rgb(20 184 166 / 12%);
+    border-color: var(--app-accent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--app-accent) 14%, transparent);
   }
 
   :is(button, a, input, textarea, select, [role='tab'], [tabindex]):focus-visible {
@@ -376,7 +454,7 @@
 
   a.underline {
     text-underline-offset: 4px;
-    text-decoration-color: rgb(15 118 110 / 35%);
+    text-decoration-color: color-mix(in srgb, var(--app-accent) 35%, transparent);
     transition:
       color 180ms ease,
       text-decoration-color 180ms ease;
@@ -387,8 +465,8 @@
       transform: translateY(-1px);
     }
     .ui-button-primary:not(:disabled):hover {
-      background: var(--color-teal-800);
-      box-shadow: 0 5px 12px rgb(15 118 110 / 20%);
+      background: var(--app-primary-hover);
+      box-shadow: 0 5px 12px color-mix(in srgb, var(--app-primary) 26%, transparent);
     }
     .ui-button-outline:not(:disabled):hover {
       background: var(--app-accent-soft);
@@ -504,7 +582,7 @@
   input,
   textarea,
   select {
-    @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-teal-600;
+    @apply focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent;
   }
   button:not(:disabled) {
     cursor: pointer;

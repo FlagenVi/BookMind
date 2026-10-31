@@ -61,14 +61,17 @@ public class SecurityConfig {
                 .requestCache(config -> config.disable())
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, "/api/auth/csrf").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/profiles/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login").permitAll()
                         // Legacy notes have no owner; do not expose them to newly registered users.
                         .requestMatchers("/api/notes", "/api/notes/**").denyAll()
                         .requestMatchers("/api/auth/me", "/api/auth/profile", "/api/auth/profile/**",
                                 "/api/auth/sessions", "/api/auth/sessions/**", "/api/documents", "/api/documents/**",
-                                "/api/books", "/api/books/**", "/api/reading", "/api/reading/**",
+                                "/api/books", "/api/books/**", "/api/novels", "/api/novels/**", "/api/reading", "/api/reading/**",
                                 "/api/materials", "/api/materials/**").authenticated()
                         .requestMatchers("/api/book-uploads", "/api/book-uploads/**").authenticated()
+                        .requestMatchers("/api/friends", "/api/friends/**", "/api/blocks", "/api/blocks/**").authenticated()
+                        .requestMatchers("/api/social/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) -> response.setStatus(401))

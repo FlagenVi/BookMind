@@ -50,7 +50,8 @@ public class SummaryQueue {
         String text=jdbc.queryForObject("SELECT original_text FROM documents WHERE id=?",String.class,document);
         String format=jdbc.queryForObject("SELECT source_type FROM documents WHERE id=?",String.class,document);
         var chapters=new ArrayList<ChapterPart>();
-        if(Set.of("fb2","epub").contains(format)) {
+        if("read".equals(scope)) chapters.addAll(readParts(document,format,text,selectedSection));
+        else if(Set.of("fb2","epub","novel").contains(format)) {
             var bookSections=jdbc.queryForList("SELECT section_number,title,role,content FROM reader_sections WHERE document_id=? ORDER BY section_number",document);
             if(!bookSections.isEmpty()) {
                 int section=0;
@@ -61,7 +62,7 @@ public class SummaryQueue {
                     if("through_chapter".equals(scope) && sourceNumber>selectedSection) continue;
                     String content=(String)row.get("content");
                     if(!"main".equals(row.get("role")) || content==null || content.isBlank()
-                            || (!"chapter".equals(scope) && isShortUntitledOpening(section,(String)row.get("title"),content,hasLaterMain))) continue;
+                            || (!"novel".equals(format) && !"chapter".equals(scope) && isShortUntitledOpening(section,(String)row.get("title"),content,hasLaterMain))) continue;
                     String heading=((String)row.get("title")).strip();
                     chapters.addAll(structuredParts(heading,content));
                     section++;
@@ -85,6 +86,24 @@ public class SummaryQueue {
             }
         }
         jdbc.update("UPDATE summary_jobs SET pipeline_version=4 WHERE id=?",job);
+    }
+    // Never reads past the boundary: later chapters, the rest of the current chapter and end notes stay out of the request.
+    private List<ChapterPart> readParts(UUID document,String format,String text,int boundary) {
+        boolean novel="novel".equals(format);
+        int limit=Math.min(Math.max(0,boundary),text.length());
+        var sections=novel
+                ? jdbc.queryForList("SELECT s.title,s.start_offset,LEAST(s.end_offset,s.start_offset+n.confirmed_offset) AS end_offset FROM reader_sections s JOIN novel_chapters n ON n.id=s.novel_chapter_id WHERE s.document_id=? AND s.role='main' AND n.confirmed_offset>0 ORDER BY s.section_number",document)
+                : jdbc.queryForList("SELECT title,start_offset,end_offset FROM reader_sections WHERE document_id=? AND role='main' AND start_offset<? ORDER BY section_number",document,limit);
+        var parts=new ArrayList<ChapterPart>();
+        for(var row:sections) {
+            int start=Math.min(((Number)row.get("start_offset")).intValue(),text.length());
+            int end=Math.min(((Number)row.get("end_offset")).intValue(),novel?text.length():limit);
+            if(end<=start) continue;
+            String content=text.substring(start,end);
+            if(!content.isBlank()) parts.addAll(structuredParts(((String)row.get("title")).strip(),content));
+        }
+        if(parts.isEmpty() && !novel && !text.substring(0,limit).isBlank()) parts.add(new ChapterPart("Прочитанная часть",text.substring(0,limit)));
+        return parts;
     }
     private static String chapterText(List<ChapterPart> chapters) {
         var text=new StringBuilder();

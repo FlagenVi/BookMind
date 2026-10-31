@@ -80,11 +80,11 @@ export function DocumentsPage() {
             TXT, MD, PDF и DOCX: содержимое, структура и изложение.
           </p>
         </div>
-        <Button asChild>
+        <Button asChild className="w-full sm:w-auto">
           <Link to="/">Добавить документ</Link>
         </Button>
       </div>
-      <section aria-label="Поиск и отображение документов" className="mt-8 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 sm:flex-row sm:items-center">
+      <section aria-label="Поиск и отображение документов" className="mt-8 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 lg:flex-row lg:items-center">
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Поиск документов</span>
           <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" size={18} />
@@ -97,11 +97,11 @@ export function DocumentsPage() {
             className="h-11 w-full rounded-xl border border-line bg-background pl-10 pr-4 outline-none transition focus:border-accent-line focus:ring-2 focus:ring-accent-soft"
           />
         </label>
-        <Button type="button" variant="outline" className="h-11 shrink-0" aria-expanded={filtersOpen} aria-controls="document-filters" onClick={() => setFiltersOpen(true)}>
+        <Button type="button" variant="outline" className="h-11 w-full shrink-0 lg:w-auto" aria-expanded={filtersOpen} aria-controls="document-filters" onClick={() => setFiltersOpen(true)}>
           <SlidersHorizontal size={18} /> Фильтры
-          {activeFilterCount > 0 && <span className="grid min-w-5 place-items-center rounded-full bg-teal-700 px-1.5 py-0.5 text-xs leading-none text-white">{activeFilterCount}</span>}
+          {activeFilterCount > 0 && <span className="grid min-w-5 place-items-center rounded-full bg-primary px-1.5 py-0.5 text-xs leading-none text-white">{activeFilterCount}</span>}
         </Button>
-        <div role="group" aria-label="Вид списка документов" className="flex shrink-0 rounded-xl border border-line bg-background p-1">
+        <div role="group" aria-label="Вид списка документов" className="flex shrink-0 self-end rounded-xl border border-line bg-background p-1 lg:self-auto">
           {([['grid', LayoutGrid, 'Плитка'], ['list', List, 'Список']] as const).map(([value, Icon, label]) => (
             <button key={value} type="button" aria-label={label} aria-pressed={view === value} title={label}
               className={`grid h-9 w-10 place-items-center rounded-lg transition-colors ${view === value ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-subtle hover:text-foreground'}`}
@@ -175,14 +175,14 @@ export function DocumentsPage() {
           <p className="mt-6 text-sm text-muted" role="status">
             {hasSelection ? 'Найдено документов' : 'Всего документов'}: {query.data.totalElements.toLocaleString('ru-RU')}
           </p>
-          <div className={`mt-4 grid gap-4 ${view === 'grid' ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
+          <div className={`mt-4 grid gap-4 ${view === 'grid' ? 'lg:grid-cols-2' : 'grid-cols-1'}`}>
             {query.data.items.map((document) => {
               const format = document.sourceType.toUpperCase()
               return (
                 <Link
                   key={document.id}
                   to={`/documents/${document.id}`}
-                  className={`document-card group min-w-0 rounded-2xl border border-line bg-surface p-5 text-foreground hover:-translate-y-0.5 hover:border-accent-line hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${view === 'grid' ? 'flex h-full flex-col' : 'sm:flex sm:items-center sm:gap-5'}`}
+                  className={`document-card group min-w-0 rounded-2xl border border-line bg-surface p-4 text-foreground hover:-translate-y-0.5 hover:border-accent-line hover:shadow-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent sm:p-5 ${view === 'grid' ? 'flex h-full flex-col' : 'sm:flex sm:items-center sm:gap-5'}`}
                 >
                   <div className="flex min-w-0 items-start gap-4">
                     <span
@@ -222,7 +222,7 @@ export function DocumentsPage() {
                     </div>
                   </div>
                   {view === 'grid' && (
-                    <div className="mt-5 rounded-xl border border-line/70 bg-page/70 px-4 py-3">
+                    <div className="mt-5">
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                         Фрагмент
                       </p>
@@ -332,7 +332,7 @@ export function DocumentPage() {
                 </div>
                 <Button
                   variant="outline"
-                  className="text-danger"
+                  className="w-full text-danger sm:w-auto"
                   onClick={() => setConfirmDelete(true)}
                 >
                   <Trash2 size={16} /> Удалить

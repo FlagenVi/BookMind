@@ -61,6 +61,7 @@ export function ContinuousReader({
   navigation,
   onNavigationSettled,
   onActiveOffset,
+  onReachEnd,
   highlights,
   searchMatches,
   activeSearchIndex,
@@ -78,6 +79,7 @@ export function ContinuousReader({
   navigation: ScrollNavigation | null
   onNavigationSettled: (id: number) => void
   onActiveOffset: (offset: number, source: 'user' | 'programmatic') => void
+  onReachEnd: () => void
   highlights: Highlight[]
   searchMatches: BookSearchItem[]
   activeSearchIndex: number | null
@@ -260,6 +262,9 @@ export function ContinuousReader({
         focusOffsetRef.current = offset
         setFocusOffset(offset)
         onActiveOffset(offset, 'user')
+        if (targetViewport.scrollHeight > targetViewport.clientHeight + 8 &&
+            targetViewport.scrollTop + targetViewport.clientHeight >= targetViewport.scrollHeight - 8)
+          onReachEnd()
         scrollFrame.current = 0
       })
     }
@@ -286,7 +291,7 @@ export function ContinuousReader({
       window.clearTimeout(programmaticTimer.current)
       if (scrollFrame.current) cancelAnimationFrame(scrollFrame.current)
     }
-  }, [onActiveOffset, viewportRef])
+  }, [onActiveOffset, onReachEnd, viewportRef])
 
   const registerNode = useCallback(
     (unitId: string, node: HTMLElement | null) => {

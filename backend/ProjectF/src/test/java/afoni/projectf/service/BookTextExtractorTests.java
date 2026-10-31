@@ -15,6 +15,14 @@ import static org.junit.jupiter.api.Assertions.*;
 public class BookTextExtractorTests {
     private final BookTextExtractor extractor=new BookTextExtractor();
 
+    @Test void standaloneHtmlChaptersDiscardScriptsAndKeepReadingOrder() {
+        var book=extractor.extractBook("<html><head><title>Глава</title><style>bad</style></head><body><h1>Начало</h1><p>Первый абзац.</p><script>alert(1)</script><p>Второй абзац.</p></body></html>".getBytes(StandardCharsets.UTF_8),"html");
+        assertEquals(1,book.sections().size());
+        assertTrue(book.text().indexOf("Первый абзац")<book.text().indexOf("Второй абзац"));
+        assertFalse(book.text().contains("alert(1)"));
+        assertFalse(book.text().contains("bad"));
+    }
+
     public static byte[] fb2() {
         return ("<?xml version='1.0' encoding='windows-1251'?><FictionBook xmlns='http://www.gribuser.ru/xml/fictionbook/2.0'><description><title-info><book-title>Метаданные</book-title></title-info></description><body><section><title><p>Первая</p></title><p>Привет <emphasis>мир</emphasis>!</p></section></body><binary>Обложка</binary></FictionBook>").getBytes(Charset.forName("windows-1251"));
     }

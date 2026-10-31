@@ -58,7 +58,7 @@ export function PreparationStatus({ id }: { id: string }) {
       {['queued', 'processing', 'ready'].includes(data.status) && (
         <progress
           aria-label="Подготовка текста"
-          className="mt-3 h-2 w-full accent-teal-700"
+          className="mt-3 h-2 w-full accent-primary"
           max={100}
           value={percent}
         />

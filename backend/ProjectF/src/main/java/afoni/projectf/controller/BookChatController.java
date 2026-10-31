@@ -89,15 +89,25 @@ public class BookChatController {
                     rs->rs.next()?rs.getInt(1):0,user,bookId);
             if(!hasSelection && confirmed<=0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Сначала сохраните позицию чтения или выберите режим по знаниям модели");
             String original=jdbc.queryForObject("SELECT original_text FROM documents WHERE id=?",String.class,bookId);
-            var sections=jdbc.query("SELECT section_number,title,start_offset,end_offset FROM reader_sections WHERE document_id=? AND role='main' ORDER BY section_number",
-                    (rs,n)->new BookChatContext.Section(rs.getInt(1),rs.getString(2),rs.getInt(3),rs.getInt(4)),bookId);
+            boolean novel="novel".equals(jdbc.queryForObject("SELECT source_type FROM documents WHERE id=?",String.class,bookId));
+            var sections=novel
+                    ? jdbc.query("SELECT s.section_number,s.title,s.start_offset,LEAST(s.end_offset,s.start_offset+n.confirmed_offset) FROM reader_sections s "+
+                                    "JOIN novel_chapters n ON n.id=s.novel_chapter_id WHERE s.document_id=? AND s.role='main' AND n.confirmed_offset>0 ORDER BY s.section_number",
+                            (rs,n)->new BookChatContext.Section(rs.getInt(1),rs.getString(2),rs.getInt(3),rs.getInt(4)),bookId)
+                    : jdbc.query("SELECT section_number,title,start_offset,end_offset FROM reader_sections WHERE document_id=? AND role='main' ORDER BY section_number",
+                            (rs,n)->new BookChatContext.Section(rs.getInt(1),rs.getString(2),rs.getInt(3),rs.getInt(4)),bookId);
             if(hasSelection) {
                 try { source=BookChatContext.selectedFragment(original,confirmed,input.selectedStart(),input.selectedEnd(),input.selectedText(),sections); }
                 catch(IllegalArgumentException error) { throw new ResponseStatusException(HttpStatus.CONFLICT,error.getMessage()); }
-            } else source=BookChatContext.select(original,confirmed,question,sections);
+            } else {
+                if(novel && sections.isEmpty()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Сначала прочитайте часть новеллы, чтобы Книжник мог опираться на её текст");
+                source=BookChatContext.select(original,confirmed,question,sections);
+            }
             if(source.text().isBlank()) throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"До сохранённой позиции нет текста для ответа");
         }
-        List<Map<String,Object>> history=hasSelection?new ArrayList<>():jdbc.queryForList("SELECT question,answer FROM book_chat_turns WHERE thread_id=? AND status='ready' AND mode=? ORDER BY created_at DESC,id DESC LIMIT 3",threadId,mode);
+        List<Map<String,Object>> history=hasSelection?new ArrayList<>():"grounded".equals(mode)
+                ? jdbc.queryForList("SELECT question,answer FROM book_chat_turns WHERE thread_id=? AND status='ready' AND mode=? AND source_updated_at=? ORDER BY created_at DESC,id DESC LIMIT 3",threadId,mode,book.get("updated_at"))
+                : jdbc.queryForList("SELECT question,answer FROM book_chat_turns WHERE thread_id=? AND status='ready' AND mode=? ORDER BY created_at DESC,id DESC LIMIT 3",threadId,mode);
         Collections.reverse(history);
         var messages=new ArrayList<BookChatClient.Message>();
         String title=(String)book.get("title"),author=(String)book.get("author");

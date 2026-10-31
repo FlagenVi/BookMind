@@ -46,7 +46,7 @@
 
 .pdf-text-layer ::selection {
   color: transparent;
-  background: color-mix(in srgb, var(--color-accent, #0d9488), transparent 55%);
+  background: color-mix(in srgb, var(--color-accent, #5058a8), transparent 55%);
 }
 
 .pdf-text-layer .pdf-text-match {

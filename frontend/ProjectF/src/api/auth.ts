@@ -9,6 +9,26 @@ export interface Profile {
   avatarUpdatedAt: string
   createdAt: string
   documentCount: number
+  username: string | null
+  visibility: 'public' | 'friends' | 'private'
+  showLibrary: boolean
+  showStatistics: boolean
+  showActivity: boolean
+  showFriends: boolean
+  favoriteGenres: string[]
+  featuredBookIds: string[]
+}
+export interface ProfileUpdate {
+  displayName?: string
+  bio?: string
+  username?: string
+  visibility?: Profile['visibility']
+  showLibrary?: boolean
+  showStatistics?: boolean
+  showActivity?: boolean
+  showFriends?: boolean
+  favoriteGenres?: string[]
+  featuredBookIds?: string[]
 }
 export interface UserSession {
   id: string
@@ -40,7 +60,7 @@ export const authApi = {
       body: JSON.stringify(input),
     }),
   logout: () => request<void>('/auth/logout', { method: 'POST' }),
-  updateProfile: (input: { displayName: string; bio: string }) =>
+  updateProfile: (input: ProfileUpdate) =>
     request<Profile>('/auth/profile', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

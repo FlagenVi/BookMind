@@ -7,13 +7,16 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test tests/reader-geometry.test.ts tests/text-anchors.test.ts tests/section-cache.test.ts tests/reader-api.test.ts tests/book-details-format.test.ts tests/book-favorite-cache.test.ts tests/reader-navigation.test.ts tests/reader-segments.test.ts tests/reader-preferences.test.ts",
+    "test": "node --experimental-strip-types --test tests/reader-geometry.test.ts tests/text-anchors.test.ts tests/section-cache.test.ts tests/reader-api.test.ts tests/book-details-format.test.ts tests/book-favorite-cache.test.ts tests/reader-navigation.test.ts tests/reader-segments.test.ts tests/reader-preferences.test.ts tests/activity-calendar.test.ts tests/social-messaging.test.ts",
     "benchmark:reader": "node --experimental-strip-types --expose-gc benchmarks/reader-window.bench.ts",
     "preview": "vite preview",
     "format": "prettier --write src vite.config.ts index.html",
     "format:check": "prettier --check src vite.config.ts index.html"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^5.9.1",
     "@radix-ui/react-slot": "^1.3.3",
     "@tanstack/react-query": "^5.102.8",

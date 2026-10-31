@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Share2,
   Trash2,
   Upload,
   X,
@@ -37,6 +38,8 @@ import {
 } from '../api/books'
 import { ApiError } from '../api/client'
 import { DocumentUpload } from '../components/DocumentUpload'
+import { ShareBookDialog } from '../components/ShareBookDialog'
+import { NovelChaptersPage } from './NovelChaptersPage'
 import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
@@ -97,6 +100,10 @@ function fileSize(value: number | null) {
   }).format(size)} ${units[unit]}`
 }
 
+function formatLabel(format: string) {
+  return format === 'novel' ? 'Новелла' : format.toUpperCase()
+}
+
 function normalizeGenres(value: string) {
   return value
     .split(',')
@@ -150,6 +157,7 @@ function refreshErrorMessage(error: Error) {
 
 export function LibraryPage() {
   const queryClient = useQueryClient()
+  const [sharedBookId, setSharedBookId] = useState<string | null>(null)
   const [page, setPage] = useState(0)
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
@@ -167,6 +175,7 @@ export function LibraryPage() {
   const [editingDetails, setEditingDetails] = useState(false)
   const [detailsForm, setDetailsForm] = useState<DetailsForm | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadKind, setUploadKind] = useState<'book' | 'novel'>('book')
   const [filtersOpen, setFiltersOpen] = useState(false)
   const closeFilters = useCallback(() => setFiltersOpen(false), [])
   const [collectionEditor, setCollectionEditor] = useState<
@@ -202,6 +211,14 @@ export function LibraryPage() {
     sort !== 'recent',
     direction !== 'default',
   ].filter(Boolean).length
+  const hasActiveSelection = Boolean(
+    search.trim() ||
+      status !== 'all' ||
+      format !== 'all' ||
+      genre ||
+      favorite === 'yes' ||
+      collection !== 'all',
+  )
   const query = useQuery({
     queryKey: ['books', page, filters],
     queryFn: ({ signal }) => booksApi.list(page, filters, signal),
@@ -468,6 +485,7 @@ export function LibraryPage() {
 
   return (
     <>
+      {sharedBookId && <ShareBookDialog bookId={sharedBookId} onClose={() => setSharedBookId(null)} />}
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">
@@ -481,19 +499,18 @@ export function LibraryPage() {
             фрагментам.
           </p>
         </div>
-        <Button className="shrink-0" onClick={() => setUploadOpen(true)}>
-          <Plus size={18} />
-          Добавить книгу
+        <Button className="w-full shrink-0 sm:w-auto" onClick={() => { setUploadKind('book'); setUploadOpen(true) }}>
+          <Plus size={18} /> Добавить книгу
         </Button>
       </header>
 
       <section
         aria-label="Коллекции"
-        className="mt-7 flex flex-wrap items-center gap-2"
+        className="project-scrollbar library-collections -mx-4 mt-7 flex flex-nowrap items-center gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0"
       >
         <button
           type="button"
-          className={`rounded-xl border px-3 py-2 text-sm font-medium transition ${collection === 'all' ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
+          className={`min-h-11 shrink-0 whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${collection === 'all' ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
           onClick={() => {
             setCollection('all')
             setPage(0)
@@ -503,7 +520,7 @@ export function LibraryPage() {
         </button>
         <button
           type="button"
-          className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium transition ${collection === 'none' ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
+          className={`inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${collection === 'none' ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
           onClick={() => {
             setCollection('none')
             setPage(0)
@@ -515,11 +532,11 @@ export function LibraryPage() {
         {collectionItems.map((item) => (
           <div
             key={item.id}
-            className={`inline-flex overflow-hidden rounded-xl border transition ${collection === item.id ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
+            className={`inline-flex min-h-11 shrink-0 overflow-hidden rounded-xl border transition ${collection === item.id ? 'border-accent-line bg-accent-soft text-accent' : 'border-line bg-surface text-secondary hover:border-line-strong'}`}
           >
             <button
               type="button"
-              className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium"
+              className="inline-flex items-center gap-2 whitespace-nowrap px-3 py-2 text-sm font-medium"
               onClick={() => {
                 setCollection(item.id)
                 setPage(0)
@@ -533,7 +550,7 @@ export function LibraryPage() {
               type="button"
               aria-label={`Настроить коллекцию «${item.name}»`}
               title="Настроить коллекцию"
-              className="border-l border-current/15 px-2.5 text-muted transition hover:bg-subtle hover:text-foreground"
+              className="min-w-11 border-l border-current/15 px-2.5 text-muted transition hover:bg-subtle hover:text-foreground"
               onClick={() => openCollectionEditor(item)}
             >
               <Pencil size={14} />
@@ -542,7 +559,7 @@ export function LibraryPage() {
         ))}
         <button
           type="button"
-          className="inline-flex items-center gap-2 rounded-xl border border-dashed border-line-strong px-3 py-2 text-sm font-medium text-muted transition hover:border-accent-line hover:bg-accent-soft hover:text-accent"
+          className="inline-flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap rounded-xl border border-dashed border-line-strong px-3 py-2 text-sm font-medium text-muted transition hover:border-accent-line hover:bg-accent-soft hover:text-accent"
           onClick={() => openCollectionEditor('new')}
         >
           <FolderPlus size={16} />
@@ -552,7 +569,7 @@ export function LibraryPage() {
 
       <section
         aria-label="Поиск и отображение библиотеки"
-        className="mt-8 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 sm:flex-row sm:items-center"
+        className="mt-8 flex flex-col gap-3 rounded-2xl border border-line bg-surface p-4 lg:flex-row lg:items-center"
       >
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Поиск по книгам</span>
@@ -575,7 +592,7 @@ export function LibraryPage() {
         <Button
           type="button"
           variant="outline"
-          className="relative h-11 shrink-0"
+          className="relative h-11 w-full shrink-0 lg:w-auto"
           aria-expanded={filtersOpen}
           aria-controls="library-filters"
           onClick={() => setFiltersOpen(true)}
@@ -583,13 +600,13 @@ export function LibraryPage() {
           <SlidersHorizontal size={18} />
           Фильтры
           {activeFilterCount > 0 && (
-            <span className="grid min-w-5 place-items-center rounded-full bg-teal-700 px-1.5 py-0.5 text-xs leading-none text-white">
+            <span className="grid min-w-5 place-items-center rounded-full bg-primary px-1.5 py-0.5 text-xs leading-none text-white">
               {activeFilterCount}
             </span>
           )}
         </Button>
         <div
-          className="flex shrink-0 rounded-xl border border-line bg-background p-1"
+          className="flex shrink-0 self-end rounded-xl border border-line bg-background p-1 lg:self-auto"
           aria-label="Вид библиотеки"
         >
           <button
@@ -676,7 +693,7 @@ export function LibraryPage() {
                     <option value="all">Все форматы</option>
                     {(facets.data?.formats ?? []).map((value) => (
                       <option key={value} value={value}>
-                        {value.toUpperCase()}
+                        {formatLabel(value)}
                       </option>
                     ))}
                   </NativeSelect>
@@ -864,25 +881,36 @@ export function LibraryPage() {
         <div className="mt-8 rounded-2xl border border-dashed border-line-strong p-10 text-center">
           <LibraryBig className="mx-auto text-muted" size={34} />
           <h2 className="mt-4 text-xl font-semibold">
-            {search ||
-            status !== 'all' ||
-            format !== 'all' ||
-            genre ||
-            favorite === 'yes' ||
-            collection !== 'all'
-              ? 'Книги не найдены'
-              : 'Библиотека пока пустая'}
+            {hasActiveSelection ? 'Книги не найдены' : 'Библиотека пока пустая'}
           </h2>
           <p className="mt-2 text-muted">
-            {search ||
-            status !== 'all' ||
-            format !== 'all' ||
-            genre ||
-            favorite === 'yes' ||
-            collection !== 'all'
+            {hasActiveSelection
               ? 'Попробуйте изменить поиск или фильтр.'
               : 'Первая загруженная книга появится здесь.'}
           </p>
+          {hasActiveSelection ? (
+            <Button
+              variant="outline"
+              className="mt-5"
+              onClick={() => {
+                setSearch('')
+                setStatus('all')
+                setFormat('all')
+                setGenre('')
+                setFavorite('all')
+                setCollection('all')
+                setSort('recent')
+                setDirection('default')
+                setPage(0)
+              }}
+            >
+              Сбросить поиск и фильтры
+            </Button>
+          ) : (
+            <Button className="mt-5" onClick={() => { setUploadKind('book'); setUploadOpen(true) }}>
+              Добавить книгу
+            </Button>
+          )}
         </div>
       ) : (
         <div
@@ -932,7 +960,7 @@ export function LibraryPage() {
                     <div className="flex min-w-0 items-center gap-2">
                       <input
                         type="checkbox"
-                        className="h-5 w-5 shrink-0 rounded border-line bg-surface accent-teal-700"
+                        className="h-5 w-5 shrink-0 rounded border-line bg-surface accent-primary"
                         checked={selected.has(book.id)}
                         onChange={() => toggleSelected(book.id)}
                         aria-label={`Выбрать книгу «${book.title}»`}
@@ -1043,7 +1071,7 @@ export function LibraryPage() {
                       </span>
                       <span className="flex items-center gap-2">
                         <span className="rounded-md bg-subtle px-1.5 py-0.5 font-medium">
-                          {book.format.toUpperCase()}
+                          {formatLabel(book.format)}
                         </span>
                         {book.fileSizeBytes != null && (
                           <span>{fileSize(book.fileSizeBytes)}</span>
@@ -1063,7 +1091,7 @@ export function LibraryPage() {
                       className="mt-2 h-1.5 overflow-hidden rounded-full bg-subtle"
                     >
                       <div
-                        className="h-full rounded-full bg-teal-600 transition-[width] duration-500"
+                        className="h-full rounded-full bg-primary transition-[width] duration-500"
                         style={{ width: `${ready ? progress : 8}%` }}
                       />
                     </div>
@@ -1087,7 +1115,16 @@ export function LibraryPage() {
                             : 'Открыть подготовку'}
                         </Link>
                       </Button>
+                      {book.format === 'novel' && (
+                        <Link
+                          to={`/library/${book.id}/chapters`}
+                          className="inline-flex min-h-10 items-center justify-center rounded-xl border border-line px-3 text-sm font-semibold text-secondary hover:border-accent-line hover:text-accent"
+                        >
+                          Главы
+                        </Link>
+                      )}
                       <div className="flex items-center gap-0.5">
+                        <button type="button" className="flex size-9 items-center justify-center rounded-lg text-muted hover:bg-subtle hover:text-accent" aria-label={`Рекомендовать книгу «${book.title}» другу`} title="Рекомендовать другу" onClick={() => setSharedBookId(book.id)}><Share2 size={17} /></button>
                         <button
                           type="button"
                           aria-label={`Переместить книгу «${book.title}» в коллекцию`}
@@ -1164,15 +1201,15 @@ export function LibraryPage() {
         <ModalDialog
           labelledBy="library-upload-title"
           onClose={() => setUploadOpen(false)}
-          className="w-full max-w-xl overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl"
+          className={`project-scrollbar max-h-dvh w-full overflow-y-auto rounded-2xl border border-line bg-surface shadow-2xl sm:max-h-[calc(100dvh-2.5rem)] ${uploadKind === 'novel' ? 'max-w-4xl' : 'max-w-xl'}`}
         >
-          <header className="flex items-center justify-between gap-4 border-b border-line px-5 py-4 sm:px-6">
+          <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-line bg-surface px-5 py-4 sm:px-6">
             <h2 id="library-upload-title" className="text-xl font-semibold">
-              Добавить книгу
+              Добавить в библиотеку
             </h2>
             <button
               type="button"
-              aria-label="Закрыть загрузку книги"
+              aria-label="Закрыть загрузку"
               className="rounded-lg p-2 text-muted transition hover:bg-subtle hover:text-foreground"
               onClick={() => setUploadOpen(false)}
             >
@@ -1180,7 +1217,27 @@ export function LibraryPage() {
             </button>
           </header>
           <div className="p-5 sm:p-6">
-            <DocumentUpload destination="reader" embedded />
+            <div className="mb-5 grid grid-cols-2 gap-1 rounded-xl border border-line bg-page p-1" role="group" aria-label="Тип материала">
+              <button
+                type="button"
+                aria-pressed={uploadKind === 'book'}
+                className={`min-h-11 rounded-lg px-3 text-sm font-semibold transition ${uploadKind === 'book' ? 'bg-accent-soft text-accent' : 'text-muted hover:text-foreground'}`}
+                onClick={() => setUploadKind('book')}
+              >
+                Книга
+              </button>
+              <button
+                type="button"
+                aria-pressed={uploadKind === 'novel'}
+                className={`min-h-11 rounded-lg px-3 text-sm font-semibold transition ${uploadKind === 'novel' ? 'bg-accent-soft text-accent' : 'text-muted hover:text-foreground'}`}
+                onClick={() => setUploadKind('novel')}
+              >
+                Новелла
+              </button>
+            </div>
+            <div>
+              {uploadKind === 'book' ? <DocumentUpload destination="reader" embedded /> : <NovelChaptersPage embedded />}
+            </div>
           </div>
         </ModalDialog>
       )}
@@ -1744,7 +1801,7 @@ export function LibraryPage() {
                         )?.name ?? 'Неизвестная коллекция')
                       : 'Без коллекции',
                   ],
-                  ['Формат', details.data.format.toUpperCase()],
+                  ['Формат', formatLabel(details.data.format)],
                   ['Размер файла', fileSize(details.data.fileSizeBytes)],
                   ['Имя файла', details.data.filename || 'Не указано'],
                   [

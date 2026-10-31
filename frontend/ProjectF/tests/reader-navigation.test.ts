@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  chapterStartOffset,
+  completedChapterOnAdvance,
   confirmedOffsetAfter,
   historyAnchorAtOffset,
   parseJumpTarget,
@@ -59,6 +61,30 @@ test('navigation history restores the last place first with a stable anchor', ()
 test('programmatic navigation preserves confirmed reading progress', () => {
   assert.equal(confirmedOffsetAfter(1_000, 90_000, 'programmatic'), 1_000)
   assert.equal(confirmedOffsetAfter(1_000, 1_500, 'user'), 1_500)
+})
+
+test('chapter link opens the selected main section and ignores invalid targets', () => {
+  const sections = [
+    { number: 0, role: 'main', startOffset: 0 },
+    { number: 1, role: 'main', startOffset: 500 },
+    { number: 2, role: 'auxiliary', startOffset: 900 },
+  ] as Parameters<typeof chapterStartOffset>[1]
+  assert.equal(chapterStartOffset('1', sections), 500)
+  assert.equal(chapterStartOffset('2', sections), null)
+  assert.equal(chapterStartOffset('missing', sections), null)
+  assert.equal(chapterStartOffset(null, sections), null)
+})
+
+test('only reading forward into the next chapter completes the previous chapter', () => {
+  const sections = [
+    { number: 0, role: 'main', startOffset: 0, endOffset: 100 },
+    { number: 1, role: 'main', startOffset: 102, endOffset: 200 },
+    { number: 2, role: 'main', startOffset: 202, endOffset: 300 },
+  ] as Parameters<typeof completedChapterOnAdvance>[3]
+  assert.equal(completedChapterOnAdvance(60, 102, 'user', sections, 300), 0)
+  assert.equal(completedChapterOnAdvance(60, 102, 'programmatic', sections, 300), null)
+  assert.equal(completedChapterOnAdvance(60, 202, 'user', sections, 300), null)
+  assert.equal(completedChapterOnAdvance(160, 102, 'user', sections, 300), null)
 })
 
 test('percent and offset jump values are validated', () => {

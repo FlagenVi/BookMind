@@ -32,6 +32,7 @@ import {
   MessageCircleQuestion,
   ScrollText,
   Settings2,
+  Share2,
   Trash2,
   Undo2,
   X,
@@ -47,9 +48,11 @@ import {
   type SectionLink,
 } from '../api/books'
 import { ApiError } from '../api/client'
+import { novelsApi } from '../api/novels'
 import type { BookChatSelection } from '../api/bookChat'
 import { BookChatPanel } from '../components/BookChatPanel'
 import { SummaryPanel } from '../components/SummaryPanel'
+import { ShareBookDialog, type SharedQuote } from '../components/ShareBookDialog'
 import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
@@ -64,6 +67,8 @@ import {
   type ProgressAnchor,
 } from '../reader/textAnchors'
 import {
+  chapterStartOffset,
+  completedChapterOnAdvance,
   confirmedOffsetAfter,
   historyAnchorAtOffset,
   parseJumpTarget,
@@ -287,6 +292,19 @@ function SearchExcerpt({ item }: { item: BookSearchItem }) {
   )
 }
 
+function ReaderLoading({ message, theme }: { message: string; theme: string }) {
+  return (
+    <div className="reader-shell min-h-dvh bg-page text-foreground" data-reader-theme={theme}>
+      <div className="mx-auto flex min-h-dvh max-w-xl flex-col items-center justify-center gap-4 px-6 text-center">
+        <span className="grid size-12 place-items-center rounded-2xl border border-line bg-surface text-accent" aria-hidden="true">
+          <BookOpen size={23} />
+        </span>
+        <p role="status" className="text-sm font-medium text-secondary">{message}</p>
+      </div>
+    </div>
+  )
+}
+
 export function ReaderPage() {
   const { id = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -317,6 +335,7 @@ export function ReaderPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const settingsDialog = useRef<HTMLElement>(null)
   const [draft, setDraft] = useState<SelectionDraft | null>(null)
+  const [sharedQuote, setSharedQuote] = useState<SharedQuote | null>(null)
   const [selectionEditorOpen, setSelectionEditorOpen] = useState(false)
   const [selectionCopied, setSelectionCopied] = useState(false)
   const [chatSelection, setChatSelection] = useState<BookChatSelection | null>(null)
@@ -368,6 +387,8 @@ export function ReaderPage() {
   const pagedContent = useRef<HTMLElement>(null)
   const gesture = useRef({ x: 0, y: 0, pointerId: -1, moved: false })
   const lastGesture = useRef(0)
+  const lastTouchInteraction = useRef(0)
+  const touchSelectionTimer = useRef<number | null>(null)
   const activeOffsetRef = useRef(0)
   const readingStartedAt = useRef(0)
   const lastReadingActivityAt = useRef(0)
@@ -375,12 +396,17 @@ export function ReaderPage() {
   const readingSessionSeconds = useRef(0)
   const progressVersion = useRef(0)
   const confirmedOffsetRef = useRef(0)
+  const completedNovelChapters = useRef(new Set<number>())
   const pendingProgress = useRef<LocalProgress | null>(null)
   const progressSaving = useRef(false)
   const skipNextLocalSave = useRef(false)
   const scrollNavigationId = useRef(0)
   const tabId = useRef(randomClientId())
   const progressChannel = useRef<BroadcastChannel | null>(null)
+
+  useEffect(() => {
+    completedNovelChapters.current.clear()
+  }, [id])
 
   const manifest = useQuery({
     queryKey: ['book', id, 'manifest'],
@@ -453,7 +479,7 @@ export function ReaderPage() {
     confirmedOffsetRef.current = localWins
       ? (local.confirmedOffset ?? savedProgress.data.confirmedOffset)
       : savedProgress.data.confirmedOffset
-    const offset = offsetFromAnchor(
+    const restoredOffset = offsetFromAnchor(
       {
         positionOffset: source.positionOffset,
         sectionNumber: source.sectionNumber ?? null,
@@ -462,6 +488,7 @@ export function ReaderPage() {
       manifest.data.sections,
       manifest.data.textLength,
     )
+    const offset = chapterStartOffset(searchParams.get('chapter'), manifest.data.sections) ?? restoredOffset
     pendingProgress.current = localWins ? local : null
     skipNextLocalSave.current = !localWins && offset !== activeOffsetRef.current
     setActiveOffset(offset)
@@ -977,6 +1004,19 @@ export function ReaderPage() {
   }[preferences.theme]
   const fontClass = `reader-font-${preferences.font}`
 
+  const completeNovelChapter = useCallback((number: number) => {
+    if (manifest.data?.format !== 'novel' || completedNovelChapters.current.has(number)) return
+    completedNovelChapters.current.add(number)
+    void novelsApi.complete(id, number)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['novel', id, 'chapters'] }))
+      .catch(() => completedNovelChapters.current.delete(number))
+  }, [id, manifest.data?.format, queryClient])
+
+  const handleReaderEnd = useCallback(() => {
+    const last = manifest.data?.sections.filter((item) => item.role === 'main').at(-1)
+    if (last) completeNovelChapter(last.number)
+  }, [completeNovelChapter, manifest.data?.sections])
+
   const updateReaderOffset = useCallback(
     (requestedOffset: number, source: 'user' | 'programmatic') => {
       if (!manifest.data) return
@@ -984,6 +1024,10 @@ export function ReaderPage() {
         0,
         Math.min(manifest.data.textLength, requestedOffset),
       )
+      if (source === 'user' && manifest.data.format === 'novel' && offset > activeOffsetRef.current) {
+        const completed = completedChapterOnAdvance(activeOffsetRef.current, offset, source, manifest.data.sections, manifest.data.textLength)
+        if (completed !== null) completeNovelChapter(completed)
+      }
       confirmedOffsetRef.current = confirmedOffsetAfter(
         confirmedOffsetRef.current,
         offset,
@@ -993,7 +1037,7 @@ export function ReaderPage() {
       setActiveOffset(offset)
       return offset
     },
-    [manifest.data],
+    [completeNovelChapter, manifest.data],
   )
 
   const handleNavigationSettled = useCallback((navigationId: number) => {
@@ -1267,6 +1311,8 @@ export function ReaderPage() {
         Math.max(previous.startOffset, previous.endOffset - 1),
         'user',
       )
+    } else if (direction > 0 && sectionIndex === sections.length - 1) {
+      handleReaderEnd()
     }
   }
 
@@ -1429,8 +1475,9 @@ export function ReaderPage() {
     )
   }
 
-  function captureSelection() {
-    if (touchPaging || Date.now() - lastGesture.current < 350) return
+  function captureSelection(fromTouch = false) {
+    if ((!fromTouch && (touchPaging || Date.now() - lastTouchInteraction.current < 700)) ||
+        Date.now() - lastGesture.current < 350) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || selection.rangeCount === 0)
       return
@@ -1468,6 +1515,20 @@ export function ReaderPage() {
       placeBelow: rect.top <= 220,
     })
   }
+
+  function scheduleTouchSelection() {
+    if (touchSelectionTimer.current !== null)
+      window.clearTimeout(touchSelectionTimer.current)
+    touchSelectionTimer.current = window.setTimeout(() => {
+      touchSelectionTimer.current = null
+      captureSelection(true)
+    }, 180)
+  }
+
+  useEffect(() => () => {
+    if (touchSelectionTimer.current !== null)
+      window.clearTimeout(touchSelectionTimer.current)
+  }, [])
 
   function askAboutSelection(selection: SelectionDraft) {
     setChatSelection(selection)
@@ -1687,7 +1748,7 @@ export function ReaderPage() {
   ])
 
   if (manifest.isPending || savedProgress.isPending)
-    return <p role="status">Открываем книгу…</p>
+    return <ReaderLoading message="Открываем книгу…" theme={preferences.theme} />
   if (manifest.isError || savedProgress.isError)
     return (
       <div role="alert" className="rounded-2xl bg-danger-soft p-5">
@@ -1705,13 +1766,14 @@ export function ReaderPage() {
       </div>
     )
   if (initializedBookId !== id)
-    return <p role="status">Восстанавливаем место чтения…</p>
+    return <ReaderLoading message="Восстанавливаем место чтения…" theme={preferences.theme} />
 
   return (
     <div
       className="reader-shell min-h-screen bg-page text-foreground"
       data-reader-theme={preferences.theme}
     >
+      {sharedQuote && <ShareBookDialog bookId={id} quote={sharedQuote} onClose={() => setSharedQuote(null)} />}
       {chromeVisible && (
         <header className="sticky top-0 z-30 flex min-h-16 items-center gap-1 border-b border-line bg-page/95 px-2 backdrop-blur sm:gap-2 sm:px-3 md:px-5">
         <Button
@@ -1930,6 +1992,14 @@ export function ReaderPage() {
                     {progress}%
                   </span>
                 </button>
+                {manifest.data.format === 'novel' && (
+                  <Link
+                    to={`/library/${id}/chapters`}
+                    className="mt-3 flex min-h-11 items-center justify-center rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-accent hover:bg-accent-soft"
+                  >
+                    Добавить и упорядочить главы
+                  </Link>
+                )}
                 {tocGroup('Основной текст', mainToc, mainTocOpen, () =>
                   setMainTocOpen((value) => !value),
                 )}
@@ -2265,7 +2335,12 @@ export function ReaderPage() {
             overflowAnchor: preferences.mode === 'scroll' ? 'none' : undefined,
           }}
           onPointerDown={(event) => {
-            if (preferences.mode === 'scroll' || event.pointerType !== 'touch')
+            if (event.pointerType === 'touch')
+              lastTouchInteraction.current = Date.now()
+            if (preferences.mode === 'scroll' ||
+                manifest.data.format === 'pdf' ||
+                manifest.data.format === 'docx' ||
+                event.pointerType !== 'touch')
               return
             gesture.current = {
               x: event.clientX,
@@ -2273,19 +2348,33 @@ export function ReaderPage() {
               pointerId: event.pointerId,
               moved: false,
             }
-            event.currentTarget.setPointerCapture(event.pointerId)
-            setTouchPaging(true)
           }}
           onPointerMove={(event) => {
             if (gesture.current.pointerId !== event.pointerId) return
-            if (
-              Math.abs(event.clientX - gesture.current.x) > 10 ||
-              Math.abs(event.clientY - gesture.current.y) > 10
-            )
+            if (window.getSelection()?.isCollapsed === false) {
+              if (event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.releasePointerCapture(event.pointerId)
+              gesture.current.pointerId = -1
+              setTouchPaging(false)
+              return
+            }
+            const dx = Math.abs(event.clientX - gesture.current.x)
+            const dy = Math.abs(event.clientY - gesture.current.y)
+            if (dx > 10 || dy > 10)
               gesture.current.moved = true
+            if (dx > 12 && dx > dy * 1.2) {
+              setTouchPaging(true)
+              if (!event.currentTarget.hasPointerCapture(event.pointerId))
+                event.currentTarget.setPointerCapture(event.pointerId)
+            }
           }}
           onPointerUp={(event) => {
             if (gesture.current.pointerId !== event.pointerId) return
+            if (window.getSelection()?.isCollapsed === false) {
+              gesture.current.pointerId = -1
+              setTouchPaging(false)
+              return
+            }
             const dx = event.clientX - gesture.current.x
             const dy = event.clientY - gesture.current.y
             if (Math.abs(dx) > 55 && Math.abs(dx) > Math.abs(dy) * 1.2) {
@@ -2300,6 +2389,7 @@ export function ReaderPage() {
             gesture.current.pointerId = -1
             setTouchPaging(false)
           }}
+          onTouchEnd={scheduleTouchSelection}
           onClick={(event) => {
             if (
               Date.now() - lastGesture.current < 350 ||
@@ -2552,7 +2642,7 @@ export function ReaderPage() {
                   setPreferences((value) => ({ ...value, mode }))
                 }
                 onActiveOffset={updateReaderOffset}
-                onSelection={captureSelection}
+                onSelection={() => captureSelection()}
               />
             </Suspense>
           ) : manifest.data.format === 'docx' ? (
@@ -2574,7 +2664,7 @@ export function ReaderPage() {
                 searchQuery={searchQuery}
                 highlights={highlights.data ?? []}
                 onActiveOffset={updateReaderOffset}
-                onSelection={captureSelection}
+                onSelection={() => captureSelection()}
               />
             </Suspense>
           ) : preferences.mode !== 'scroll' && section.isPending ? (
@@ -2596,7 +2686,7 @@ export function ReaderPage() {
             <>
               <div
                 ref={readingArea}
-                onMouseUp={captureSelection}
+                onMouseUp={() => captureSelection()}
                 className={`mx-auto reader-text-${preferences.textAlign} ${preferences.mode === 'scroll' ? `min-h-full py-8 sm:py-12 ${themeClass}` : `${chromeVisible ? 'h-[calc(100dvh-8rem)]' : 'h-dvh'} py-5 sm:py-8`}`}
                 style={{
                   maxWidth:
@@ -2615,6 +2705,7 @@ export function ReaderPage() {
                     navigation={scrollNavigation}
                     onNavigationSettled={handleNavigationSettled}
                     onActiveOffset={updateReaderOffset}
+                    onReachEnd={handleReaderEnd}
                     highlights={highlights.data ?? []}
                     searchMatches={searchResults.data?.items ?? []}
                     activeSearchIndex={activeSearchMatch?.index ?? null}
@@ -2698,6 +2789,7 @@ export function ReaderPage() {
                     <Button variant="outline" className="px-2" onClick={() => void copySelection(draft)}>
                       <Copy size={16} /> {selectionCopied ? 'Готово' : 'Копировать'}
                     </Button>
+                    <Button variant="outline" className="col-span-2 px-2 sm:col-span-4" onClick={() => { setSharedQuote(draft); setDraft(null); window.getSelection()?.removeAllRanges() }}><Share2 size={16} />Поделиться с другом</Button>
                   </div>
                   {addHighlight.isError && (
                     <p className="mt-3 text-sm text-danger" role="alert">
@@ -3141,7 +3233,7 @@ export function ReaderPage() {
                 >
                   <div className="h-2 overflow-hidden rounded-full bg-subtle" aria-hidden="true">
                     <div
-                      className="h-full overflow-hidden rounded-full bg-teal-600"
+                      className="h-full overflow-hidden rounded-full bg-primary"
                       style={{ width: `${progress}%` }}
                     />
                   </div>
