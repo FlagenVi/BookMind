@@ -1269,6 +1269,45 @@ class ProjectFApplicationTests {
     }
 
     @Test
+    void repeatedFailedLoginsBlockTheAccountEvenForTheRightPassword() throws Exception {
+        String email=UUID.randomUUID()+"@example.test",password=UUID.randomUUID().toString();
+        registerAccount(email,password);
+        String wrong="{\"email\":\""+email+"\",\"password\":\"неверный-пароль-123\"}";
+        for(int i=0;i<afoni.projectf.service.LoginThrottle.MAX_FAILURES;i++)
+            mvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(wrong))
+                    .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\""+email.toUpperCase()+"\",\"password\":\""+password+"\"}"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.message").value("Слишком много неудачных попыток входа. Попробуйте через 15 минут"));
+        // Other accounts are unaffected.
+        String other=UUID.randomUUID()+"@example.test";
+        registerAccount(other,password);
+        mvc.perform(post("/api/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"email\":\""+other+"\",\"password\":\""+password+"\"}")).andExpect(status().isOk());
+    }
+
+    @Test
+    void completingANovelChapterWithEmojiConfirmsItsWholeText() throws Exception {
+        String email=UUID.randomUUID()+"@example.test";
+        var session=registerAccount(email,UUID.randomUUID().toString());
+        String chapter="Герой улыбается 😀 и уходит. ".repeat(20).strip();
+        var file=new org.springframework.mock.web.MockMultipartFile("files","глава.txt","text/plain",chapter.getBytes(StandardCharsets.UTF_8));
+        var layout=new org.springframework.mock.web.MockMultipartFile("layout","","application/json",
+                "{\"chapters\":[{\"key\":\"0:0\",\"title\":\"Глава 1\"}]}".getBytes(StandardCharsets.UTF_8));
+        var title=new org.springframework.mock.web.MockMultipartFile("title","","text/plain","Новелла".getBytes(StandardCharsets.UTF_8));
+        var created=mvc.perform(multipart("/api/novels").file(file).file(layout).file(title).session(session).with(csrf()))
+                .andExpect(status().isCreated()).andReturn();
+        String id=JsonPath.read(created.getResponse().getContentAsString(),"$.id");
+        mvc.perform(post("/api/novels/"+id+"/chapters/number/0/complete").session(session).with(csrf()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.read").value(true));
+        int length=jdbc.queryForObject("SELECT end_offset-start_offset FROM reader_sections WHERE document_id=?::uuid AND section_number=0",Integer.class,id);
+        // Each emoji is two UTF-16 units but one PostgreSQL character.
+        assertTrue(length>jdbc.queryForObject("SELECT char_length(content) FROM novel_chapters WHERE document_id=?::uuid",Integer.class,id));
+        assertEquals(length,jdbc.queryForObject("SELECT confirmed_offset FROM novel_chapters WHERE document_id=?::uuid",Integer.class,id));
+    }
+
+    @Test
     void browserCsrfFlowRotatesTokenAfterAuthentication() throws Exception {
         var initial = mvc.perform(get("/api/auth/csrf")).andExpect(status().isOk()).andReturn();
         var session = (MockHttpSession) initial.getRequest().getSession(false);

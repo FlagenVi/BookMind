@@ -6,6 +6,8 @@ import afoni.projectf.repository.DocumentRepository;
 import afoni.projectf.security.SecurityConfig;
 import afoni.projectf.service.UserSessionService;
 import afoni.projectf.service.RememberedLoginService;
+import afoni.projectf.service.LoginThrottle;
+import org.springframework.security.core.AuthenticationException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
@@ -46,15 +48,18 @@ public class AuthController {
     private final UserSessionService sessions;
     private final RememberedLoginService remembered;
     private final JdbcTemplate jdbc;
+    private final LoginThrottle throttle;
 
     public AuthController(UserAccountRepository users, DocumentRepository documents, PasswordEncoder encoder,
                           AuthenticationManager manager, SecurityContextRepository contexts, HttpSessionCsrfTokenRepository csrf,
-                          UserSessionService sessions, RememberedLoginService remembered, JdbcTemplate jdbc) {
+                          UserSessionService sessions, RememberedLoginService remembered, JdbcTemplate jdbc,
+                          LoginThrottle throttle) {
         this.users = users; this.documents = documents; this.encoder = encoder;
         this.manager = manager; this.contexts = contexts; this.csrf = csrf;
         this.sessions = sessions;
         this.remembered = remembered;
         this.jdbc = jdbc;
+        this.throttle = throttle;
     }
 
     public record Credentials(@NotBlank @Email @Size(max=254) String email,
@@ -94,7 +99,18 @@ public class AuthController {
     }
 
     private Profile signIn(Credentials input, HttpServletRequest request, HttpServletResponse response) {
-        var auth = manager.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(input.email(), input.password()));
+        // Checked before the password, so a correct guess after the limit is still rejected.
+        if (throttle.blocked(input.email()))
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Слишком много неудачных попыток входа. Попробуйте через 15 минут");
+        Authentication auth;
+        try {
+            auth = manager.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(input.email(), input.password()));
+        } catch (AuthenticationException failure) {
+            throttle.failed(input.email());
+            throw failure;
+        }
+        throttle.succeeded(input.email());
         new ChangeSessionIdAuthenticationStrategy().onAuthentication(auth, request, response);
         new CsrfAuthenticationStrategy(csrf).onAuthentication(auth, request, response);
         var context = SecurityContextHolder.createEmptyContext();

@@ -133,11 +133,13 @@ class SocialMessagingTests {
         UUID client=UUID.randomUUID();long first=send(alice,conversation,client,"");
         jdbc.update("UPDATE social_rate_limits SET request_count=30 WHERE user_id=? AND action='message'",alice.id());
         mvc.perform(post("/api/social/conversations/"+conversation+"/messages").session(alice.session()).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"clientId\":\""+UUID.randomUUID()+"\",\"body\":\"Привет\"}")).andExpect(status().isTooManyRequests());
+                .content("{\"clientId\":\""+UUID.randomUUID()+"\",\"body\":\"Привет\"}")).andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.message").value("Слишком много действий. Попробуйте чуть позже"));
         assertEquals(first,send(alice,conversation,client,""));
         mvc.perform(post("/api/blocks/"+alice.username()).session(bob.session()).with(csrf())).andExpect(status().isNoContent());
         mvc.perform(post("/api/social/conversations/"+conversation+"/messages").session(alice.session()).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"clientId\":\""+UUID.randomUUID()+"\",\"body\":\"Нежелательное\"}")).andExpect(status().isForbidden());
+                .content("{\"clientId\":\""+UUID.randomUUID()+"\",\"body\":\"Нежелательное\"}")).andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Переписка доступна только друзьям без взаимных блокировок"));
         mvc.perform(get("/api/social/conversations/"+conversation).session(alice.session())).andExpect(jsonPath("$.canSend").value(false));
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM social_notifications WHERE (user_id=? AND actor_id=?) OR (user_id=? AND actor_id=?)",Integer.class,alice.id(),bob.id(),bob.id(),alice.id()));
     }

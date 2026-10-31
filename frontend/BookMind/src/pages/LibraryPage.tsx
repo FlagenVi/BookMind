@@ -148,10 +148,6 @@ function formFromDetails(details: BookDetails): DetailsForm {
 function refreshErrorMessage(error: Error) {
   if (!(error instanceof ApiError)) return error.message
   if (error.status === 409) return 'Исходный файл книги недоступен'
-  if (error.status === 422)
-    return error.message === 'Не удалось выполнить запрос'
-      ? 'В файле не найдены дополнительные метаданные'
-      : error.message
   return error.message
 }
 

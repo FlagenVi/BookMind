@@ -134,7 +134,9 @@ public class NovelController {
     @Transactional
     Chapter completeChapter(Authentication auth,@PathVariable UUID id,@PathVariable int number) {
         owned(id,auth,false);
-        if(jdbc.update("UPDATE novel_chapters SET confirmed_offset=length(content),read_override=NULL WHERE document_id=? AND chapter_number=?",id,number)==0)
+        // Section bounds are Java string offsets; PostgreSQL length() counts code points and is shorter for emoji.
+        if(jdbc.update("UPDATE novel_chapters n SET confirmed_offset=s.end_offset-s.start_offset,read_override=NULL FROM reader_sections s "+
+                "WHERE s.novel_chapter_id=n.id AND n.document_id=? AND n.chapter_number=?",id,number)==0)
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Глава не найдена");
         return chapters(id).stream().filter(chapter->chapter.number()==number).findFirst().orElseThrow();
     }

@@ -21,18 +21,21 @@ public class ApiExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<ErrorBody> conflict() { return error(HttpStatus.CONFLICT, "Данные конфликтуют с существующей записью"); }
     @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
-    ResponseEntity<ErrorBody> tooLarge() { return error(HttpStatus.PAYLOAD_TOO_LARGE, "Файл слишком большой. Максимум — 10 МБ."); }
+    ResponseEntity<ErrorBody> tooLarge() { return error(HttpStatus.PAYLOAD_TOO_LARGE, "Файл слишком большой. Максимум — 30 МБ."); }
     @ExceptionHandler(org.springframework.web.multipart.support.MissingServletRequestPartException.class)
-    ResponseEntity<ErrorBody> missingFile() { return error(HttpStatus.BAD_REQUEST, "Выберите файл TXT"); }
+    ResponseEntity<ErrorBody> missingFile() { return error(HttpStatus.BAD_REQUEST, "Выберите файл"); }
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<ErrorBody> status(ResponseStatusException ex) {
-        return ResponseEntity.status(ex.getStatusCode()).body(new ErrorBody(switch (ex.getStatusCode().value()) {
-            case 404 -> "Документ не найден"; case 401 -> "Необходимо войти в аккаунт";
-            case 409 -> ex.getReason() == null ? "Данные были изменены в другой вкладке" : ex.getReason();
-            case 413 -> "Файл слишком большой. Максимум — 10 МБ.";
-            case 400 -> ex.getReason() == null ? "Проверьте заполнение полей" : ex.getReason();
+        // Reasons are written for users in the controllers; the defaults cover exceptions thrown without one.
+        String message = ex.getReason() != null ? ex.getReason() : switch (ex.getStatusCode().value()) {
+            case 404 -> "Не найдено"; case 401 -> "Необходимо войти в аккаунт";
+            case 403 -> "Действие недоступно"; case 409 -> "Данные были изменены в другой вкладке";
+            case 413 -> "Файл слишком большой. Максимум — 30 МБ.";
+            case 429 -> "Слишком много запросов. Попробуйте чуть позже";
+            case 400 -> "Проверьте заполнение полей";
             default -> "Не удалось выполнить запрос";
-        }));
+        };
+        return ResponseEntity.status(ex.getStatusCode()).body(new ErrorBody(message));
     }
     private ResponseEntity<ErrorBody> error(HttpStatus status, String message) { return ResponseEntity.status(status).body(new ErrorBody(message)); }
 }
