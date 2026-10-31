@@ -23,7 +23,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   UserRound,
-  Users,
   type LucideIcon,
 } from 'lucide-react'
 import { authApi } from './api/auth'
@@ -106,7 +105,6 @@ const navigation: NavigationItem[] = [
   { to: '/library', title: 'Библиотека', Icon: BookOpen },
   { to: '/documents', title: 'Документы', Icon: Files },
   { to: '/communication', title: 'Общение', Icon: MessageCircle },
-  { to: '/communities', title: 'Сообщества', Icon: Users },
   { to: '/notifications', title: 'Уведомления', Icon: Bell },
 ]
 
@@ -114,7 +112,6 @@ const mobileNavigation: NavigationItem[] = [
   { to: '/library', title: 'Библиотека', Icon: BookOpen },
   { to: '/documents', title: 'Документы', Icon: Files },
   { to: '/communication', title: 'Общение', Icon: MessageCircle },
-  { to: '/communities', title: 'Сообщества', Icon: Users },
   { to: '/profile', title: 'Профиль', Icon: UserRound },
 ]
 

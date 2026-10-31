@@ -44,7 +44,7 @@ import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
 import { NativeSelect } from '../components/ui/native-select'
 import { SideDrawer } from '../components/ui/side-drawer'
-import { languageDisplayName } from '../library/bookDetailsFormat'
+import { bookFormatLabel, languageDisplayName } from '../library/bookDetailsFormat'
 import {
   bookPageQueries,
   setCachedBookFavorite,
@@ -100,9 +100,6 @@ function fileSize(value: number | null) {
   }).format(size)} ${units[unit]}`
 }
 
-function formatLabel(format: string) {
-  return format === 'novel' ? 'Новелла' : format.toUpperCase()
-}
 
 function normalizeGenres(value: string) {
   return value
@@ -689,7 +686,7 @@ export function LibraryPage() {
                     <option value="all">Все форматы</option>
                     {(facets.data?.formats ?? []).map((value) => (
                       <option key={value} value={value}>
-                        {formatLabel(value)}
+                        {bookFormatLabel(value)}
                       </option>
                     ))}
                   </NativeSelect>
@@ -1067,7 +1064,7 @@ export function LibraryPage() {
                       </span>
                       <span className="flex items-center gap-2">
                         <span className="rounded-md bg-subtle px-1.5 py-0.5 font-medium">
-                          {formatLabel(book.format)}
+                          {bookFormatLabel(book.format)}
                         </span>
                         {book.fileSizeBytes != null && (
                           <span>{fileSize(book.fileSizeBytes)}</span>
@@ -1095,7 +1092,7 @@ export function LibraryPage() {
                       <Button
                         asChild
                         className={
-                          view === 'grid' ? 'min-w-0 flex-1 px-3' : 'px-4'
+                          view === 'grid' ? 'flex-1 whitespace-nowrap px-3' : 'px-4'
                         }
                         variant={ready ? 'default' : 'outline'}
                       >
@@ -1797,7 +1794,7 @@ export function LibraryPage() {
                         )?.name ?? 'Неизвестная коллекция')
                       : 'Без коллекции',
                   ],
-                  ['Формат', formatLabel(details.data.format)],
+                  ['Формат', bookFormatLabel(details.data.format)],
                   ['Размер файла', fileSize(details.data.fileSizeBytes)],
                   ['Имя файла', details.data.filename || 'Не указано'],
                   [

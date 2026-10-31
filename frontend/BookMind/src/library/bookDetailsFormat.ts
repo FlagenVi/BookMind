@@ -1,3 +1,7 @@
+export function bookFormatLabel(format: string) {
+  return format === 'novel' ? 'Новелла' : format.toUpperCase()
+}
+
 export function languageDisplayName(value: string | null) {
   if (!value) return 'Не указано'
   const code = value.trim()

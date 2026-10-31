@@ -34,6 +34,7 @@ import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
 import { ThemeToggle } from '../components/ThemeToggle'
 import { PrivacySettings } from '../components/PrivacySettings'
+import { bookFormatLabel } from '../library/bookDetailsFormat'
 
 type Period = 'day' | 'week' | 'month'
 
@@ -60,6 +61,19 @@ function duration(seconds: number | null | undefined) {
   return [hours ? `${hours} ч` : '', minutes ? `${minutes} мин` : '']
     .filter(Boolean)
     .join(' ')
+}
+
+// "сентября 2026 г.": a month formatted with a day takes the genitive case,
+// which "В BookMind с …" needs; the day itself is dropped.
+function memberSince(value: string) {
+  const parts = new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).formatToParts(new Date(value))
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? ''
+  return `${part('month')} ${part('year')} г.`
 }
 
 function dateTime(value: string) {
@@ -245,12 +259,7 @@ export function ProfilePage() {
                   </p>
                 )}
                 <p className="mt-1 text-sm text-muted">
-                  В ProjectF с{' '}
-                  {me.data &&
-                    new Date(me.data.createdAt).toLocaleDateString('ru-RU', {
-                      month: 'long',
-                      year: 'numeric',
-                    })}
+                  {me.data && `В BookMind с ${memberSince(me.data.createdAt)}`}
                 </p>
               </div>
             </div>
@@ -544,7 +553,7 @@ export function ProfilePage() {
                         {statistics.data.currentBook.title}
                       </h3>
                       <p className="mt-1 text-xs text-muted">
-                        {statistics.data.currentBook.format.toUpperCase()}
+                        {bookFormatLabel(statistics.data.currentBook.format)}
                       </p>
                       <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-subtle">
                         <div
