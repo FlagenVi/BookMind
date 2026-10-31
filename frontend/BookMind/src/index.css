@@ -61,6 +61,38 @@
   }
 }
 
+/* Login page: soft accent glows with a dotted texture that fades towards the edges. */
+.auth-backdrop {
+  z-index: 0;
+  background:
+    radial-gradient(
+      48rem 32rem at 5% 0%,
+      color-mix(in srgb, var(--app-accent) 22%, transparent),
+      transparent 65%
+    ),
+    radial-gradient(
+      42rem 30rem at 100% 100%,
+      color-mix(in srgb, var(--app-primary) 18%, transparent),
+      transparent 65%
+    );
+}
+
+.auth-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--app-line-strong) 60%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(
+    ellipse 70% 65% at 30% 40%,
+    #000 15%,
+    transparent 80%
+  );
+}
+
 .mobile-app-header {
   padding-top: max(0.5rem, env(safe-area-inset-top));
 }
