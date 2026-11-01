@@ -86,6 +86,17 @@ public class SummaryController {
             result.put("readPercent",length==0?0:Math.min(100,(int)Math.round(sectionNumber*100.0/length)));
             if(result.get("baseBoundary") instanceof Number base)
                 result.put("basePercent",length==0?0:Math.min(100,(int)Math.round(base.intValue()*100.0/length)));
+            // After reading further the current position has no summary yet; the latest earlier one is still worth showing.
+            if(!"ready".equals(result.get("status"))) {
+                var previous=jdbc.queryForList("SELECT s.summary_text,j.scope_section_number FROM summary_jobs j JOIN summaries s ON s.id=j.result_id JOIN documents d ON d.id=j.document_id "+
+                        "WHERE j.document_id=? AND j.compression_level=? AND j.scope_mode='read' AND j.status='ready' AND j.scope_section_number<? AND j.source_revision=d.novel_revision "+
+                        "ORDER BY j.scope_section_number DESC LIMIT 1",id,level,sectionNumber);
+                if(!previous.isEmpty()) {
+                    result.put("previousText",previous.getFirst().get("summary_text"));
+                    int previousBoundary=((Number)previous.getFirst().get("scope_section_number")).intValue();
+                    result.put("previousPercent",length==0?0:Math.min(100,(int)Math.round(previousBoundary*100.0/length)));
+                }
+            }
         }
         var activeJobs=jdbc.queryForList("SELECT compression_level AS level,scope_mode AS scope,scope_section_number AS \"sectionNumber\",status FROM summary_jobs WHERE document_id=? AND status IN ('queued','running','waiting') ORDER BY created_at LIMIT 1",id);
         if(!activeJobs.isEmpty()) result.put("activeJob",activeJobs.getFirst());

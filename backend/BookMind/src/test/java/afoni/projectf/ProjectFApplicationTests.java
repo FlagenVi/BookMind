@@ -270,7 +270,8 @@ class ProjectFApplicationTests {
                 .andExpect(jsonPath("$.status").value("ready")).andExpect(jsonPath("$.readBoundary").value(boundary));
         // Reading further starts a new summary and keeps the earlier one in history.
         jdbc.update("UPDATE reading_progress SET confirmed_offset=? WHERE user_id=? AND document_id=?",text.length(),user,book);
-        mvc.perform(get(path+"?scope=read").session(owner)).andExpect(jsonPath("$.status").value("not_started"));
+        mvc.perform(get(path+"?scope=read").session(owner)).andExpect(jsonPath("$.status").value("not_started"))
+                .andExpect(jsonPath("$.previousText").value("Герой нашёл письмо и открыл конверт.")).andExpect(jsonPath("$.previousPercent").isNumber());
         mvc.perform(post(path).session(owner).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(read)).andExpect(status().isNoContent());
         assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM summary_jobs WHERE document_id=? AND scope_mode='read'",Integer.class,book));
         // The new summary extends the earlier one with only the text read since then.

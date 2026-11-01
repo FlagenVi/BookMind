@@ -52,6 +52,7 @@ import { novelsApi } from '../api/novels'
 import type { BookChatSelection } from '../api/bookChat'
 import { BookChatPanel } from '../components/BookChatPanel'
 import { SummaryPanel } from '../components/SummaryPanel'
+import { RecallCard } from '../components/RecallCard'
 import { ShareBookDialog, type SharedQuote } from '../components/ShareBookDialog'
 import { Button } from '../components/ui/button'
 import { ModalDialog } from '../components/ui/modal-dialog'
@@ -310,6 +311,8 @@ export function ReaderPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const assistantOpen = searchParams.get('panel') === 'book' || searchParams.get('summary') === '1'
   const assistantTab = searchParams.get('tab') === 'chat' ? 'chat' : 'summary'
+  // The assistant shows the recall card and the chat together; the full summary options are a sub-view.
+  const [recallSettings, setRecallSettings] = useState(false)
   const setAssistant = (open: boolean, tab: 'summary' | 'chat' = assistantTab) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
@@ -1883,33 +1886,42 @@ export function ReaderPage() {
       {assistantOpen && (
         <ModalDialog
           labelledBy="reader-assistant-title"
-          onClose={() => setAssistant(false)}
+          onClose={() => {
+            setRecallSettings(false)
+            setAssistant(false)
+          }}
           placement="right"
-          className={`project-scrollbar h-dvh w-full max-w-[560px] overscroll-contain border-l border-line bg-page p-4 text-foreground shadow-2xl sm:p-6 ${assistantTab === 'chat' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}
+          className="project-scrollbar flex h-dvh w-full max-w-[560px] flex-col overflow-hidden overscroll-contain border-l border-line bg-page p-4 text-foreground shadow-2xl sm:p-6"
         >
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex shrink-0 items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-wider text-accent">Книга</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-accent">Книжник</p>
               <h2 id="reader-assistant-title" className="mt-1 truncate text-lg font-semibold">{manifest.data.title}</h2>
             </div>
-            <Button variant="outline" className="shrink-0 px-3" aria-label="Закрыть помощника" onClick={() => setAssistant(false)}>
+            <Button variant="outline" className="shrink-0 px-3" aria-label="Закрыть помощника" onClick={() => {
+              setRecallSettings(false)
+              setAssistant(false)
+            }}>
               <X size={18} />
             </Button>
           </div>
-          <div className="mt-5 grid grid-cols-2 gap-2" role="tablist" aria-label="Помощник по книге" onKeyDown={handleTabKeys}>
-            <button id="reader-assistant-summary-tab" type="button" role="tab" tabIndex={assistantTab === 'summary' ? 0 : -1} aria-controls="reader-assistant-panel" aria-selected={assistantTab === 'summary'} className={`min-h-11 rounded-xl px-3 py-2 text-sm font-semibold ${assistantTab === 'summary' ? 'bg-accent-soft text-accent' : 'bg-surface text-muted'}`} onClick={() => setAssistant(true, 'summary')}>Изложение</button>
-            <button id="reader-assistant-chat-tab" type="button" role="tab" tabIndex={assistantTab === 'chat' ? 0 : -1} aria-controls="reader-assistant-panel" aria-selected={assistantTab === 'chat'} className={`min-h-11 rounded-xl px-3 py-2 text-sm font-semibold ${assistantTab === 'chat' ? 'bg-accent-soft text-accent' : 'bg-surface text-muted'}`} onClick={() => setAssistant(true, 'chat')}>Чат</button>
-          </div>
-          <div id="reader-assistant-panel" role="tabpanel" aria-labelledby={`reader-assistant-${assistantTab}-tab`} className={assistantTab === 'chat' ? 'flex min-h-0 flex-1 flex-col' : undefined}>
-          {assistantTab === 'summary' ? (
-            <SummaryPanel key={id} id={id} chapters={manifest.data.sections} />
+          {recallSettings && !chatSelection ? (
+            <div className="project-scrollbar mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <Button variant="outline" className="px-3" onClick={() => setRecallSettings(false)}>
+                <ArrowLeft size={17} aria-hidden="true" /> К Книжнику
+              </Button>
+              <SummaryPanel key={id} id={id} chapters={manifest.data.sections} />
+            </div>
           ) : (
-            <BookChatPanel key={`${id}:${chatSelection ? `${chatSelection.startOffset}:${chatSelection.endOffset}` : 'chat'}`} bookId={id} initialSelection={chatSelection} onSelectionConsumed={() => setChatSelection(null)} onOpenSource={(offset, label) => {
-              setAssistant(false)
-              navigateToOffset(offset, { source: 'internal', label: `Чат: ${label}`, preferSmooth: false })
-            }} />
+            <div className="mt-4 flex min-h-0 flex-1 flex-col">
+              {!chatSelection && <RecallCard key={id} id={id} onOpenSettings={() => setRecallSettings(true)} />}
+              <BookChatPanel key={`${id}:${chatSelection ? `${chatSelection.startOffset}:${chatSelection.endOffset}` : 'chat'}`} bookId={id} initialSelection={chatSelection} onSelectionConsumed={() => setChatSelection(null)} onOpenSource={(offset, label) => {
+                setRecallSettings(false)
+                setAssistant(false)
+                navigateToOffset(offset, { source: 'internal', label: `Чат: ${label}`, preferSmooth: false })
+              }} />
+            </div>
           )}
-          </div>
         </ModalDialog>
       )}
 

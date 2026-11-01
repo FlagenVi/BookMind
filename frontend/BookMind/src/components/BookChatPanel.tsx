@@ -7,6 +7,12 @@ import { NativeSelect } from './ui/native-select'
 
 const botName = 'Книжник'
 
+const suggestions = [
+  'Кто главные герои и что о них уже известно?',
+  'Что произошло в последней прочитанной главе?',
+  'Какие загадки и сюжетные линии пока не раскрыты?',
+]
+
 function FormattedAnswer({ text }: { text: string }) {
   return (
     <p className="whitespace-pre-wrap break-words">
@@ -102,6 +108,32 @@ export function BookChatPanel({
     },
   })
   const hasPending = turns.data?.some((turn) => turn.status === 'pending') ?? false
+  // A suggested question also starts the first conversation, so a new book needs one click.
+  const ask = async (text: string) => {
+    if (send.isPending || hasPending || create.isPending) return
+    let target = threadId
+    try {
+      target ??= (await create.mutateAsync()).id
+    } catch {
+      return // The error is shown from create.isError.
+    }
+    send.mutate({ id: crypto.randomUUID(), question: text, mode, threadId: target })
+  }
+  const suggestionsBlock = (
+    <div className="mt-4 flex flex-col gap-2">
+      {suggestions.map((suggestion) => (
+        <button
+          key={suggestion}
+          type="button"
+          className="rounded-xl border border-line bg-surface px-3 py-2 text-left text-sm text-secondary transition hover:border-accent-line hover:bg-accent-soft hover:text-accent disabled:opacity-50"
+          disabled={send.isPending || hasPending || create.isPending}
+          onClick={() => void ask(suggestion)}
+        >
+          {suggestion}
+        </button>
+      ))}
+    </div>
+  )
   const optimisticTurn = send.isPending && send.variables && !turns.data?.some((turn) => turn.id === send.variables?.id)
     ? send.variables : null
   const lastTurn = turns.data?.at(-1)
@@ -167,10 +199,11 @@ export function BookChatPanel({
             {turns.isPending && <p role="status" className="text-center text-sm text-muted">Загружаем историю…</p>}
             {turns.isError && <p role="alert" className="text-sm text-danger">{turns.error.message}</p>}
             {turns.data?.length === 0 && !optimisticTurn && (
-              <div className="mx-auto max-w-xs py-8 text-center">
+              <div className="mx-auto max-w-sm py-6 text-center">
                 <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-accent-soft text-accent"><BookOpenText size={22} /></span>
                 <p className="mt-3 font-semibold">Спросите Книжника о книге</p>
-                <p className="mt-1 text-sm leading-6 text-muted">Спросите о персонаже или событии. Ответы сохранятся в этой книге.</p>
+                <p className="mt-1 text-sm leading-6 text-muted">Он отвечает только по прочитанной части и показывает, на какие места опирается.</p>
+                {!selection && suggestionsBlock}
               </div>
             )}
             {turns.data?.map((turn) => (
@@ -286,9 +319,13 @@ export function BookChatPanel({
           </form>
         </>
       ) : !threads.isPending && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
-          <p className="text-sm text-muted">Бесед по этой книге пока нет.</p>
-          <Button onClick={() => create.mutate()} disabled={create.isPending}>Создать беседу</Button>
+        <div className="project-scrollbar flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto py-4 text-center">
+          <span className="flex size-11 items-center justify-center rounded-2xl bg-accent-soft text-accent"><BookOpenText size={22} /></span>
+          <p className="mt-3 font-semibold">Спросите Книжника о книге</p>
+          <p className="mt-1 max-w-sm text-sm leading-6 text-muted">Выберите вопрос или создайте беседу и спросите своё.</p>
+          <div className="w-full max-w-sm">{suggestionsBlock}</div>
+          <Button variant="outline" className="mt-3" onClick={() => create.mutate()} disabled={create.isPending}>Начать беседу</Button>
+          {send.isError && <p role="alert" className="mt-2 text-sm text-danger">{send.error.message}</p>}
         </div>
       )}
     </section>
