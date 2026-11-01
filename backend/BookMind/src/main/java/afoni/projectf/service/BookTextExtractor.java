@@ -79,7 +79,48 @@ public class BookTextExtractor {
     private ExtractedBook txt(byte[] bytes) throws CharacterCodingException {
         String text=StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
         if(text.startsWith("\uFEFF")) text=text.substring(1);
-        return book(null,null,List.of(new SectionData("Текст",text,"main",null,List.of())),List.of());
+        var chapters=txtChapters(text);
+        return book(null,null,chapters.isEmpty()?List.of(new SectionData("Текст",text,"main",null,List.of())):chapters,List.of());
+    }
+
+    // "Глава 1. Письмо", "ГЛАВА II", "Часть первая", "Chapter 3: Storm" and stand-alone "Пролог"/"Эпилог".
+    // A number, Roman numeral or ordinal word must follow the keyword, so a prose line like
+    // "Глава семьи вышел." is not taken for a heading.
+    private static final java.util.regex.Pattern TXT_HEADING=java.util.regex.Pattern.compile(
+            "(?imU)^[ \\t]*((глава|часть|книга|том|раздел|chapter|part|book)[ \\t]+"
+                    +"(\\d{1,4}|(?=[ivxlcdm])m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})"
+                    +"|(?:перв|втор|трет|четв[её]рт|пят|шест|седьм|восьм|девят|десят|одиннадцат|двенадцат|тринадцат|четырнадцат"
+                    +"|пятнадцат|шестнадцат|семнадцат|восемнадцат|девятнадцат|двадцат|тридцат|последн)[\\p{L}]{0,4}"
+                    +"|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?![\\p{L}\\d])"
+                    +"(?:[ \\t]*[.:—–-]?[ \\t]*[^\\r\\n]{0,100})?"
+                    +"|(?:пролог|эпилог|предисловие|введение|послесловие|заключение|prologue|epilogue|introduction)[.!]?)[ \\t]*$");
+    private static final Set<String> TXT_PART_KEYWORDS=Set.of("часть","книга","том","part","book");
+
+    /** Splits plain text into chapters by heading lines; empty when there are fewer than two headings. */
+    static List<SectionData> txtChapters(String text) {
+        var matcher=TXT_HEADING.matcher(text);
+        var starts=new ArrayList<Integer>();var titles=new ArrayList<String>();var parts=new ArrayList<Boolean>();
+        while(matcher.find()) {
+            starts.add(matcher.start(1));
+            titles.add(matcher.group(1).strip());
+            parts.add(matcher.group(2)!=null && TXT_PART_KEYWORDS.contains(matcher.group(2).toLowerCase(Locale.ROOT)));
+        }
+        if(starts.size()<2) return List.of();
+        // Chapters nest under parts only when the book has both.
+        boolean nested=parts.contains(true) && parts.contains(false);
+        // Text inside chapters stays exact; only the whitespace before each heading becomes the
+        // blank line that joins sections. The original file itself is stored unchanged.
+        var sections=new ArrayList<SectionData>();
+        if(!text.substring(0,starts.getFirst()).isBlank())
+            sections.add(new SectionData("Начало",text.substring(0,starts.getFirst()).stripTrailing(),"main",null,List.of(),0));
+        for(int index=0;index<starts.size();index++) {
+            boolean last=index+1==starts.size();
+            String content=text.substring(starts.get(index),last?text.length():starts.get(index+1));
+            if(!last) content=content.stripTrailing();
+            String title=titles.get(index);
+            if(!content.isBlank()) sections.add(new SectionData(title.length()<=500?title:title.substring(0,500),content,"main",null,List.of(),nested && !parts.get(index)?1:0));
+        }
+        return sections;
     }
 
     private ExtractedBook markdown(byte[] bytes) throws CharacterCodingException {

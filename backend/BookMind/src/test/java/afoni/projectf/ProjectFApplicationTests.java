@@ -322,12 +322,17 @@ class ProjectFApplicationTests {
         var restarted=new afoni.projectf.service.DocumentPreparation(jdbc,transactionManager);
         for(int i=0;i<100;i++) restarted.processNext();
         mvc.perform(get("/api/documents/"+id+"/preparation").session(session)).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ready"));
-        assertEquals(text,jdbc.queryForObject("SELECT string_agg(content,'' ORDER BY part_number) FROM document_parts WHERE document_id=?",String.class,uuid));
+        // Chapter detection normalises only the whitespace before headings; the words are untouched
+        // and preparation parts reproduce the stored text exactly.
+        String stored=jdbc.queryForObject("SELECT original_text FROM documents WHERE id=?",String.class,uuid);
+        assertEquals(text.replaceAll("\\s+"," ").strip(),stored.replaceAll("\\s+"," ").strip());
+        assertEquals(stored,jdbc.queryForObject("SELECT string_agg(content,'' ORDER BY part_number) FROM document_parts WHERE document_id=?",String.class,uuid));
+        assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM reader_sections WHERE document_id=?",Integer.class,uuid));
         assertTrue(jdbc.queryForObject("SELECT max(length(content)) FROM document_parts WHERE document_id=?",Integer.class,uuid)<=6000);
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM document_parts WHERE document_id=? AND heading LIKE 'Глава 2%'",Integer.class,uuid)>0);
         mvc.perform(post("/api/documents/"+id+"/preparation").session(session).with(csrf())).andExpect(status().isNoContent());
         restarted.processNext();
-        assertEquals(text.length(),jdbc.queryForObject("SELECT next_offset FROM document_jobs WHERE document_id=?",Integer.class,uuid));
+        assertEquals(stored.length(),jdbc.queryForObject("SELECT next_offset FROM document_jobs WHERE document_id=?",Integer.class,uuid));
         mvc.perform(delete("/api/documents/"+id).session(session).with(csrf())).andExpect(status().isNoContent());
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM document_parts WHERE document_id=?",Integer.class,uuid));
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM document_jobs WHERE document_id=?",Integer.class,uuid));

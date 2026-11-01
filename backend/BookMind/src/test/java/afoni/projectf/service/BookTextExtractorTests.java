@@ -15,6 +15,33 @@ import static org.junit.jupiter.api.Assertions.*;
 public class BookTextExtractorTests {
     private final BookTextExtractor extractor=new BookTextExtractor();
 
+    @Test void txtSplitsIntoChaptersByHeadingLines() {
+        String text="Капитан и шторм\nАвтор неизвестен\n\nГлава 1. Письмо\nЛарс нашёл письмо.\n\nГЛАВА II\nНачался шторм.\n\nГлава третья — Берег\nКорабль пристал к берегу.\n\nЭпилог\nМарта дождалась.";
+        var book=extractor.extractBook(text.getBytes(StandardCharsets.UTF_8),"txt");
+        assertEquals(List.of("Начало","Глава 1. Письмо","ГЛАВА II","Глава третья — Берег","Эпилог"),
+                book.sections().stream().map(BookTextExtractor.SectionData::title).toList());
+        assertEquals("Глава 1. Письмо\nЛарс нашёл письмо.",book.sections().get(1).text());
+        // With a blank line before each heading the imported text equals the file exactly.
+        assertEquals(text,book.text());
+        // Table of contents positions point at each chapter inside the joined text.
+        for(var entry:book.toc()) assertTrue(book.text().startsWith(entry.title(),entry.positionOffset()) || "Начало".equals(entry.title()));
+    }
+
+    @Test void txtNestsChaptersUnderPartsAndIgnoresProseThatLooksLikeAHeading() {
+        String text="Часть первая\nГлава 1\nТекст.\nГлава большой семьи вышел из дома.\nChapter did not end here.\nГлава 2\nЕщё текст.\nЧасть вторая\nГлава 3\nКонец.";
+        var sections=BookTextExtractor.txtChapters(text);
+        assertEquals(List.of("Часть первая","Глава 1","Глава 2","Часть вторая","Глава 3"),
+                sections.stream().map(BookTextExtractor.SectionData::title).toList());
+        assertEquals(List.of(0,1,1,0,1),sections.stream().map(BookTextExtractor.SectionData::tocLevel).toList());
+        assertTrue(sections.get(1).text().contains("Глава большой семьи вышел из дома."));
+    }
+
+    @Test void txtWithoutEnoughHeadingsStaysOneSection() {
+        var book=extractor.extractBook("Глава 1\nВся книга — одна глава без других заголовков.".getBytes(StandardCharsets.UTF_8),"txt");
+        assertEquals(1,book.sections().size());
+        assertEquals("Текст",book.sections().getFirst().title());
+    }
+
     @Test void standaloneHtmlChaptersDiscardScriptsAndKeepReadingOrder() {
         var book=extractor.extractBook("<html><head><title>Глава</title><style>bad</style></head><body><h1>Начало</h1><p>Первый абзац.</p><script>alert(1)</script><p>Второй абзац.</p></body></html>".getBytes(StandardCharsets.UTF_8),"html");
         assertEquals(1,book.sections().size());

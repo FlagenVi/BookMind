@@ -20,6 +20,8 @@ export interface BookChatReference {
   title: string
   startOffset: number
   endOffset: number
+  /** Start of the excerpt; missing in answers saved before it was added. */
+  preview?: string
 }
 
 export interface BookChatTurn {

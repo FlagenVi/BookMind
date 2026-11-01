@@ -24,6 +24,18 @@ class BookChatContextTests {
         assertTrue(selected.text().length()<15000);
     }
 
+    @Test void referencesCarryAShortPreviewOfTheExcerpt() {
+        assertEquals("Ночью начался шторм, и юнга Тим помогал Ларсу…",
+                BookChatContext.preview("  Ночью начался шторм, и юнга Тим помогал Ларсу удерживать штурвал.",false,null));
+        // The chapter heading is already shown as the title.
+        assertEquals("Ночью начался шторм.",BookChatContext.preview("Глава 2. Шторм\nНочью начался шторм.",false,"Глава 2. Шторм"));
+        // A window that starts mid-word drops the broken word.
+        assertEquals("начался шторм.",BookChatContext.preview("чью начался шторм.",true,"Глава 2"));
+        String text="Глава 1\n"+"Ларс читает письмо. ".repeat(300);
+        var selected=BookChatContext.select(text,text.length(),"письмо",List.of(new BookChatContext.Section(0,"Глава 1",0,text.length())));
+        assertTrue(selected.references().stream().allMatch(ref->!ref.preview().isBlank() && ref.preview().length()<=49));
+    }
+
     @Test void stemmingMatchesOtherWordForms() {
         assertEquals(BookChatContext.stem("письмо"),BookChatContext.stem("письмом"));
         assertEquals(BookChatContext.stem("письмо"),BookChatContext.stem("Письма"));

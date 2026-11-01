@@ -11,7 +11,8 @@ public final class BookChatContext {
     private static final Pattern WORD=Pattern.compile("[\\p{L}\\p{N}]{4,}");
 
     public record Section(int number,String title,int start,int end) {}
-    public record Reference(int sectionNumber,String title,int startOffset,int endOffset) {}
+    /** preview is the start of the excerpt, shown next to the chapter title so several sources in one chapter differ. */
+    public record Reference(int sectionNumber,String title,int startOffset,int endOffset,String preview) {}
     public record Selection(String text,List<Reference> references,int positionOffset) {}
     private record Candidate(Reference reference,String text,double score) {}
     private record Window(Reference reference,String text,Map<String,Integer> counts) {}
@@ -29,6 +30,24 @@ public final class BookChatContext {
             "чтобы","книге","книги","книга","книгу","главе","главы","глава","расскажи","объясни","произошло","происходит",
             "what","which","when","where","there","this","that","with","does","about","book","chapter","happened");
     private static final Set<String> STOP_STEMS=STOP_WORDS.stream().map(BookChatContext::stem).collect(java.util.stream.Collectors.toSet());
+
+    /**
+     * The first words of an excerpt; a window cut mid-word skips that partial word,
+     * and a chapter heading already shown as the title is not repeated.
+     */
+    static String preview(String excerpt,boolean cutMidText,String title) {
+        String value=excerpt.strip().replaceAll("\\s+"," ");
+        if(cutMidText) {
+            int space=value.indexOf(' ');
+            if(space>0 && space<30) value=value.substring(space+1);
+        }
+        String heading=title==null?"":title.strip().replaceAll("\\s+"," ");
+        if(!heading.isEmpty() && value.startsWith(heading) && value.length()>heading.length())
+            value=value.substring(heading.length()).strip();
+        if(value.length()<=48) return value;
+        int cut=value.lastIndexOf(' ',48);
+        return value.substring(0,cut>20?cut:48)+"…";
+    }
 
     static String stem(String word) {
         String value=word.toLowerCase(Locale.ROOT).replace('ё','е');
@@ -52,7 +71,7 @@ public final class BookChatContext {
         // of the visible paragraph, otherwise a name at the anchor looks like a title.
         int contextStart=Math.max(section.start(),start-800);
         int contextEnd=Math.min(section.end(),end+1200);
-        Reference reference=new Reference(section.number(),section.title(),contextStart,contextEnd);
+        Reference reference=new Reference(section.number(),section.title(),contextStart,contextEnd,preview(exactText,false,null));
         String before=book.substring(contextStart,start);
         String after=book.substring(end,contextEnd);
         String text="[1] "+section.title()+" (позиции "+contextStart+"–"+contextEnd+")\n"
@@ -87,7 +106,7 @@ public final class BookChatContext {
                     if(terms.contains(word)) counts.merge(word,1,Integer::sum);
                 }
                 counts.keySet().forEach(term->documentFrequency.merge(term,1,Integer::sum));
-                windows.add(new Window(new Reference(section.number(),section.title(),from,to),excerpt,counts));
+                windows.add(new Window(new Reference(section.number(),section.title(),from,to,preview(excerpt,from>section.start(),section.title())),excerpt,counts));
             }
         }
         if(windows.isEmpty()) return new Selection("",List.of(),boundary);

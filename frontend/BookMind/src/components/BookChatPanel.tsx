@@ -227,10 +227,20 @@ export function BookChatPanel({
                         : 'По знаниям модели · не проверено по файлу'}
                     </p>
                     {!!turn.references?.length && (
-                      <div className="mt-3 flex flex-wrap gap-2 border-t border-line pt-3">
+                      <div className={`mt-3 border-t border-line pt-3 ${turn.references.some((reference) => reference.preview) ? 'flex flex-col gap-1.5' : 'flex flex-wrap gap-2'}`}>
                         {turn.references.map((reference, index) => (
-                          <Button key={`${turn.id}-${index}`} variant="outline" className="min-h-8 px-2 py-1 text-xs" onClick={() => onOpenSource(reference.startOffset, reference.title)}>
-                            [{index + 1}] {reference.title}
+                          <Button
+                            key={`${turn.id}-${index}`}
+                            variant="outline"
+                            className="min-h-8 min-w-0 justify-start px-2 py-1 text-left text-xs"
+                            title={reference.preview ? `${reference.title}: «${reference.preview}»` : reference.title}
+                            onClick={() => onOpenSource(reference.startOffset, reference.title)}
+                          >
+                            <span className="shrink-0 text-accent">[{index + 1}]</span>
+                            <span className="min-w-0 truncate">
+                              {reference.title}
+                              {reference.preview && <span className="font-normal text-muted"> · «{reference.preview}»</span>}
+                            </span>
                           </Button>
                         ))}
                       </div>
